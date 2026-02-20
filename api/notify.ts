@@ -1,6 +1,6 @@
 
 import { MongoClient } from 'mongodb';
-import clientPromise from '../lib/mongodb.js';
+import clientPromise from './lib/mongodb.js';
 
 // Cette fonction utilise maintenant fetch pour appeler directement l'API Mailjet.
 const sendEmail = async (to: string, subject: string, html: string, dedupKey?: string) => {
