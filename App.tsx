@@ -161,7 +161,7 @@ const App: React.FC = () => {
     }
     return 'dashboard';
   });
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [cleaners, setCleaners] = useState<Cleaner[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -228,6 +228,7 @@ const App: React.FC = () => {
     const missionId = mission[missionIdKey];
 
     const prevMission = missions.find(m => (m._id || m.id) === missionId);
+    const isCompleting = mission.status === 'completed' && prevMission?.status !== 'completed';
 
     if (mission.cleanerId && mission.status === 'pending') {
       mission.status = 'assigned';
@@ -243,6 +244,20 @@ const App: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mission)
       });
+
+      if (isCompleting && !isAdmin) {
+        const cleaner = cleaners.find(c => c.id === mission.cleanerId);
+        fetch('/api/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: ADMIN_EMAIL,
+            subject: `[Mission Traitée] ${mission.propertyId.toUpperCase()} par ${cleaner?.name}`,
+            dedupKey: `complete-${missionId}`,
+            html: `<p>Bonjour,</p><p>La mission pour <strong>${mission.propertyId.toUpperCase()}</strong> du <strong>${mission.date}</strong> a été marquée comme "Traitée" par <strong>${cleaner?.name || 'un agent'}</strong>.</p><p>Vous pouvez consulter le tableau de bord pour voir cette mise à jour.</p>`
+          })
+        });
+      }
       
       if (mission.cleanerId && (!prevMission || prevMission.cleanerId !== mission.cleanerId)) {
         const cleaner = cleaners.find(c => c.id === mission.cleanerId);
@@ -316,10 +331,16 @@ const App: React.FC = () => {
   if (!currentUser) return <Login onLogin={handleLogin} cleaners={cleaners} />;
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
-      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r transition-transform lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+    <div className="flex min-h-screen bg-slate-50 text-slate-800">
+      <aside className={`fixed inset-y-0 left-0 z-[60] w-64 bg-white border-r transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 lg:relative`}>
         <div className="p-6 h-full flex flex-col">
-          <div className="flex items-center gap-3 mb-10"><LogoComponent size="sm" /><h1 className="text-lg font-black text-[#1A2D42] uppercase">My Toul'House</h1></div>
+          <div className="flex items-center justify-between mb-10">
+            <div className="flex items-center gap-3">
+                <LogoComponent size="sm" />
+                <h1 className="text-lg font-black text-[#1A2D42] uppercase">My Toul'House</h1>
+            </div>
+            <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-1 text-slate-400 hover:text-[#1A2D42]"><X size={20}/></button>
+          </div>
           <nav className="space-y-2 flex-1 overflow-y-auto">
             {isAdmin && <SidebarItem id="dashboard" icon={LayoutDashboard} label="Tableau de bord" activeTab={activeTab} setActiveTab={setActiveTab} />}
             {isAdmin && <SidebarItem id="calendar" icon={CalendarIcon} label="Calendriers" activeTab={activeTab} setActiveTab={setActiveTab} />}
@@ -337,10 +358,14 @@ const App: React.FC = () => {
           </div>
         </div>
       </aside>
+      
+      {isSidebarOpen && <div onClick={() => setIsSidebarOpen(false)} className="fixed inset-0 bg-black/30 z-50 lg:hidden" />} 
 
-      <main className={`flex-1 transition-all ${isSidebarOpen ? 'lg:ml-64' : ''}`}>
+      <main className="flex-1 flex flex-col w-full">
         <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b px-6 py-4 flex items-center justify-between">
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="lg:hidden p-2 hover:bg-slate-100 rounded-lg"><Menu size={24} /></button>
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-100 rounded-lg">
+            {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
+          </button>
           <div className="flex items-center gap-4">
             <span className="text-xs font-black text-slate-400 uppercase tracking-widest">{activeTab}</span>
           </div>
@@ -353,39 +378,41 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <div className="p-6 max-w-7xl mx-auto">
-          {activeTab === 'dashboard' && <DashboardView missions={missions} cleaners={cleaners} onUpdateMission={handleUpdateMission} />}
-          {activeTab === 'calendar' && <CalendarsTabView onSync={handleManualSync} isSyncing={isSyncing} />}
-          {activeTab === 'agent-calendar' && <AgentCalendarView missions={missions} currentCleaner={currentUser as Cleaner} />}
-          {activeTab === 'missions' && (
-            <MissionsTableView 
-              missions={missions} 
-              cleaners={cleaners} 
-              isAdmin={isAdmin} 
-              currentCleaner={isAdmin ? null : currentUser as Cleaner} 
-              onUpdateMission={handleUpdateMission} 
-              onDeleteMission={handleDeleteMission}
-              onCreateMission={() => setIsCreatingMission(true)}
-              onEditNote={(m: Mission) => setEditingNoteMission(m)}
-              onSync={handleManualSync}
-              isSyncing={isSyncing}
-            />
-          )}
-          {activeTab === 'staff' && (
-            <div className="space-y-6">
-              <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-black text-[#1A2D42]">Nos Agents</h2>
-                <button onClick={() => setEditingCleaner('new')} className="bg-[#1A2D42] text-white px-5 py-2.5 rounded-2xl font-bold flex items-center gap-2 shadow-lg shadow-slate-200 transition-all active:scale-95">
-                  <UserPlus size={18} />
-                  Nouvel Agent
-                </button>
+        <div className="p-2 sm:p-6 flex-1 overflow-y-auto">
+          <div className="max-w-7xl mx-auto">
+            {activeTab === 'dashboard' && <DashboardView missions={missions} cleaners={cleaners} onUpdateMission={handleUpdateMission} />}
+            {activeTab === 'calendar' && <CalendarsTabView onSync={handleManualSync} isSyncing={isSyncing} />}
+            {activeTab === 'agent-calendar' && <AgentCalendarView missions={missions} currentCleaner={currentUser as Cleaner} />}
+            {activeTab === 'missions' && (
+              <MissionsTableView 
+                missions={missions} 
+                cleaners={cleaners} 
+                isAdmin={isAdmin} 
+                currentCleaner={isAdmin ? null : currentUser as Cleaner} 
+                onUpdateMission={handleUpdateMission} 
+                onDeleteMission={handleDeleteMission}
+                onCreateMission={() => setIsCreatingMission(true)}
+                onEditNote={(m: Mission) => setEditingNoteMission(m)}
+                onSync={handleManualSync}
+                isSyncing={isSyncing}
+              />
+            )}
+            {activeTab === 'staff' && (
+              <div className="space-y-6">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-2xl font-black text-[#1A2D42]">Nos Agents</h2>
+                  <button onClick={() => setEditingCleaner('new')} className="bg-[#1A2D42] text-white px-5 py-2.5 rounded-2xl font-bold flex items-center gap-2 shadow-lg shadow-slate-200 transition-all active:scale-95">
+                    <UserPlus size={18} />
+                    Nouvel Agent
+                  </button>
+                </div>
+                <StaffGridView cleaners={cleaners} onEdit={setEditingCleaner} />
               </div>
-              <StaffGridView cleaners={cleaners} onEdit={setEditingCleaner} />
-            </div>
-          )}
-          {activeTab === 'finance' && <FinanceView missions={missions} cleaners={cleaners} />}
-          {activeTab === 'agent-finance' && <AgentFinanceView missions={missions} currentCleaner={currentUser as Cleaner} />}
-          {activeTab === 'emails' && <EmailsArchiveView onDataRefresh={loadInitialData}/>}
+            )}
+            {activeTab === 'finance' && <FinanceView missions={missions} cleaners={cleaners} />}
+            {activeTab === 'agent-finance' && <AgentFinanceView missions={missions} currentCleaner={currentUser as Cleaner} />}
+            {activeTab === 'emails' && <EmailsArchiveView onDataRefresh={loadInitialData}/>}
+          </div>
         </div>
       </main>
 
@@ -884,8 +911,8 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
         </div>
       </div>
       
-      <div className="bg-white rounded-3xl border shadow-sm overflow-visible">
-        <table className="w-full text-left">
+      <div className="bg-white rounded-3xl border shadow-sm overflow-x-auto">
+        <table className="w-full text-left table-auto">
           <thead className="bg-slate-50 border-b text-[10px] font-black uppercase text-slate-400">
             <tr>
               <th className="px-6 py-4">Propriété</th>
@@ -898,7 +925,7 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
           <tbody className="divide-y text-sm">
             {filteredMissions.map((m: any) => (
               <tr key={m._id || m.id} className="hover:bg-slate-50/50 transition-colors">
-                <td className="px-6 py-4">
+                <td className="px-6 py-4 whitespace-nowrap">
                   <div className="flex items-center gap-2">
                     <div className={`w-2.5 h-2.5 rounded-full ${PROPERTIES.find(p => p.id === m.propertyId)?.color}`} />
                     <span className="font-bold uppercase tracking-tight">{m.propertyId}</span>
@@ -913,8 +940,8 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
                     )}
                   </div>
                 </td>
-                <td className="px-6 py-4 font-medium text-slate-600">{m.date}</td>
-                <td className="px-6 py-4 relative">
+                <td className="px-6 py-4 font-medium text-slate-600 whitespace-nowrap">{m.date}</td>
+                <td className="px-6 py-4 relative whitespace-nowrap">
                   {isAdmin ? (
                     <div className="flex items-center gap-2">
                       {m.cleanerId ? (
@@ -966,8 +993,8 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
                     <span className="font-bold text-slate-800">{cleaners.find((c: any) => c.id === m.cleanerId)?.name || "-"}</span>
                   )}
                 </td>
-                <td className="px-6 py-4"><StatusBadge status={m.status} cleanerId={m.cleanerId} /></td>
-                <td className="px-6 py-4 text-right">
+                <td className="px-6 py-4 whitespace-nowrap"><StatusBadge status={m.status} cleanerId={m.cleanerId} /></td>
+                <td className="px-6 py-4 text-right whitespace-nowrap">
                   <div className="flex justify-end items-center gap-1">
                     {isAdmin && m.isManual && (
                         <button onClick={() => onDeleteMission(m)} className="p-2 text-red-400 hover:text-red-600 transition-colors" title="Supprimer la mission">
@@ -1275,56 +1302,46 @@ const AgentFinanceView = ({ missions, currentCleaner }: { missions: Mission[], c
 
 const EmailsArchiveView: React.FC<{onDataRefresh: () => void}> = ({ onDataRefresh }) => {
   const [emails, setEmails] = useState<any[]>([]);
-  const [isTesting, setIsTesting] = useState(false);
-  const [isMigrating, setIsMigrating] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const loadEmails = () => fetch('/api/emails').then(r => r.json()).then(setEmails);
   useEffect(() => { loadEmails(); }, []);
 
-  const handleTestMailjet = async () => {
-    setIsTesting(true);
+  const handleTriggerNotifications = async () => {
+    setIsProcessing(true);
     setStatus(null);
     try {
-      const response = await fetch('/api/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: ADMIN_EMAIL,
-          subject: "[TEST] API Mailjet My Toul'House",
-          html: `<h2>Connexion API OK</h2><p>Test envoyé le ${new Date().toLocaleString()}</p>`,
-          dedupKey: `test-${Date.now()}`
-        })
-      });
+      const response = await fetch('/api/cron-notifications', { method: 'POST' });
       const resData = await response.json();
       if (response.ok) {
-        setStatus({ type: 'success', message: 'Email de test envoyé avec succès !' });
-        loadEmails();
+        setStatus({ type: 'success', message: resData.message || 'Notifications envoyées.' });
+        loadEmails(); 
       } else {
-        setStatus({ type: 'error', message: resData.error || 'Erreur API lors de l\'envoi du test.' });
+        setStatus({ type: 'error', message: resData.error || 'Erreur lors de l\'envoi des notifications.' });
       }
     } catch (error) {
-      setStatus({ type: 'error', message: 'Impossible de joindre l\'API. Vérifiez la config.' });
-    } finally { setIsTesting(false); }
+      setStatus({ type: 'error', message: 'Impossible de joindre l\'API de notifications.' });
+    } finally { setIsProcessing(false); }
   };
 
   const handleMigration = async () => {
     if (!confirm("Êtes-vous sûr de vouloir nettoyer les notes de toutes les missions existantes ? Cette action est irréversible.")) return;
     
-    setIsMigrating(true);
+    setIsProcessing(true);
     setStatus(null);
     try {
       const response = await fetch('/api/migrate-notes', { method: 'POST' });
       const resData = await response.json();
       if (response.ok) {
         setStatus({ type: 'success', message: resData.message || 'Migration réussie !' });
-        onDataRefresh(); // Re-fetch all data
+        onDataRefresh();
       } else {
         setStatus({ type: 'error', message: resData.error || 'Erreur durant la migration.' });
       }
     } catch (error) {
       setStatus({ type: 'error', message: 'Impossible de joindre l\'API de migration.' });
-    } finally { setIsMigrating(false); }
+    } finally { setIsProcessing(false); }
   };
 
   return (
@@ -1332,8 +1349,8 @@ const EmailsArchiveView: React.FC<{onDataRefresh: () => void}> = ({ onDataRefres
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-black text-[#1A2D42]">Zone Technique</h2>
         <div className="flex items-center gap-3">
-          <button onClick={handleMigration} disabled={isMigrating} className="bg-red-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm">{isMigrating ? <RefreshCw className="animate-spin" size={16} /> : <Trash2 size={16} />} Purger les anciennes notes</button>
-          <button onClick={handleTestMailjet} disabled={isTesting} className="bg-orange-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm">{isTesting ? <RefreshCw className="animate-spin" size={16} /> : <Send size={16} />} Tester Mailjet</button>
+           <button onClick={handleTriggerNotifications} disabled={isProcessing} className="bg-blue-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm">{isProcessing ? <RefreshCw className="animate-spin" size={16} /> : <BellRing size={16} />} Déclencher les notifications</button>
+          <button onClick={handleMigration} disabled={isProcessing} className="bg-red-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm">{isProcessing ? <RefreshCw className="animate-spin" size={16} /> : <Trash2 size={16} />} Purger les anciennes notes</button>
         </div>
       </div>
       {status && <div className={`p-4 rounded-2xl border font-bold text-sm ${status.type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>{status.message}</div>}

@@ -1,108 +1,163 @@
-
 import { MongoClient } from 'mongodb';
 
 const uri = process.env.MONGODB_URI || "";
 const ADMIN_EMAIL = "mytoulhouse@gmail.com";
-const MAILJET_API_KEY = process.env.MAILJET_KEY_API;
-const MAILJET_SECRET_KEY = process.env.MAILJET_SECRET_API;
 
-async function sendEmail(to: string, subject: string, html: string) {
-  if (!MAILJET_API_KEY || !MAILJET_SECRET_KEY) return;
-  const auth = btoa(`${MAILJET_API_KEY}:${MAILJET_SECRET_KEY}`);
-  return fetch('https://api.mailjet.com/v3.1/send', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Basic ${auth}`
-    },
-    body: JSON.stringify({
-      Messages: [{
-        From: { Email: "mytoulhouse@gmail.com", Name: "My Toul'House" },
+const sendEmail = async (to: string, subject: string, html: string, dedupKey?: string) => {
+  const apiKey = process.env.MAILJET_API_KEY;
+  const apiSecret = process.env.MAILJET_SECRET_KEY;
+
+  if (!apiKey || !apiSecret) {
+    console.error("Mailjet API Key or Secret is not defined.");
+    // Dans une fonction serverless, il vaut mieux ne pas planter le process
+    // mais simplement logguer l'erreur et retourner.
+    return;
+  }
+
+  // Utilisation de Buffer pour l'encodage en Base64, standard en Node.js
+  const auth = Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
+
+  const body = {
+    Messages: [
+      {
+        From: {
+          Email: process.env.MAILJET_FROM_EMAIL || ADMIN_EMAIL,
+          Name: "My Toul'House",
+        },
         To: [{ Email: to }],
         Subject: subject,
-        HTMLPart: html
-      }]
-    })
-  });
+        HTMLPart: html,
+        CustomID: dedupKey || subject.replace(/\s/g, '_'),
+      },
+    ],
+  };
+
+  try {
+    const response = await fetch('https://api.mailjet.com/v3.1/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Basic ${auth}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.json();
+      console.error("Mailjet API Error:", JSON.stringify(errorBody, null, 2));
+    }
+    
+    return response;
+
+  } catch (error) {
+    console.error("Failed to send email via fetch:", error);
+    // Ne pas relancer l'erreur pour ne pas bloquer les autres envois
+  }
+};
+
+async function sendEmailWithDedup(db: any, to: string, subject: string, html: string, dedupKey: string) {
+  const emailLogs = db.collection("email_logs");
+  const alreadySent = await emailLogs.findOne({ dedupKey });
+  if (alreadySent) {
+    return false; // Déjà envoyé
+  }
+  await sendEmail(to, subject, html, dedupKey);
+  await emailLogs.insertOne({ to, subject, sentAt: new Date(), dedupKey });
+  return true;
 }
 
 export default async function handler(req: any, res: any) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).end(`Method ${req.method} Not Allowed`);
+  }
+
   const client = new MongoClient(uri);
   try {
     await client.connect();
     const db = client.db("zenclean");
-    const missions = await db.collection("missions").find({}).toArray();
-    const cleaners = await db.collection("cleaners").find({}).toArray();
-    const emailLogs = await db.collection("emails");
+    const missionsCol = db.collection("missions");
+    const cleanersCol = db.collection("cleaners");
+    const emailLogs = db.collection("email_logs");
 
+    const allMissions = await missionsCol.find({}).toArray();
+    const allCleaners = await cleanersCol.find({ email: { $exists: true, $ne: '' } }).toArray();
+
+    const report = { newMissionAlerts: 0, reminders0d: 0, alerts7d: 0, overdueAlerts: 0 };
+    
     const today = new Date();
-    today.setHours(0,0,0,0);
+    today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split('T')[0];
 
     const in7Days = new Date();
     in7Days.setDate(today.getDate() + 7);
     const in7DaysStr = in7Days.toISOString().split('T')[0];
 
-    let report = { reminders: 0, alerts7d: 0, overdue: 0 };
+    for (const mission of allMissions) {
+      const missionId = mission._id.toString();
 
-    for (const m of missions) {
-      // 1. Rappel le jour J à l'agent assigné
-      if (m.date === todayStr && m.status === 'assigned' && m.cleanerId) {
-        const cleaner = cleaners.find(c => c.id === m.cleanerId);
-        const logKey = `reminder-${m.id}-${todayStr}`;
-        const alreadySent = await emailLogs.findOne({ subject: { $regex: logKey } });
-        
-        if (cleaner && cleaner.email && !alreadySent) {
-          await sendEmail(cleaner.email, `[RAPPEL J-0] ${logKey}`, `
-            <h3>Bonjour ${cleaner.name},</h3>
-            <p>C'est le jour de votre mission pour le bien <strong>${m.propertyId.toUpperCase()}</strong>.</p>
-            <p>N'oubliez pas de valider la mission sur l'application une fois terminée.</p>
-          `);
-          await emailLogs.insertOne({ to: cleaner.email, subject: logKey, sentAt: new Date() });
-          report.reminders++;
+      // 1. NOTIFICATION DE NOUVELLE MISSION
+      if (!mission.cleanerId) {
+        const dedupKeyNew = `new-mission-alert-${missionId}`;
+        if (!(await emailLogs.findOne({ dedupKey: dedupKeyNew }))) {
+          const eligibleAgents = allCleaners.filter(c => c.assignedProperties.includes(mission.propertyId));
+          if (eligibleAgents.length > 0) {
+            const subject = `[Nouvelle Mission Disponible] ${mission.propertyId.toUpperCase()}`;
+            const html = `<p>Bonjour,</p><p>Une nouvelle mission est disponible pour la propriété <strong>${mission.propertyId.toUpperCase()}</strong> le <strong>${mission.date}</strong>.</p><p>Connectez-vous pour la consulter.</p>`;
+            await Promise.all(eligibleAgents.map(agent => sendEmail(agent.email, subject, html)));
+            await emailLogs.insertOne({ to: 'eligible-agents', subject, sentAt: new Date(), dedupKey: dedupKeyNew });
+            report.newMissionAlerts++;
+          }
         }
       }
 
-      // 2. Alerte 7 jours avant si non assignée
-      if (m.date === in7DaysStr && m.status === 'pending' && !m.cleanerId) {
-        const logKey = `unassigned-7d-${m.id}`;
-        const alreadySent = await emailLogs.findOne({ subject: { $regex: logKey } });
-
-        if (!alreadySent) {
-          const eligibleAgents = cleaners.filter(c => c.assignedProperties.includes(m.propertyId));
-          for (const agent of eligibleAgents) {
-            if (agent.email) {
-              await sendEmail(agent.email, `[URGENT] Mission libre dans 7 jours : ${m.propertyId.toUpperCase()}`, `
-                <p>La mission du <strong>${m.date}</strong> pour <strong>${m.propertyId}</strong> n'est toujours pas assignée.</p>
-                <p>Connectez-vous pour la prendre !</p>
-              `);
-            }
+      // 2. RAPPEL J-0
+      if (mission.date === todayStr && mission.cleanerId && mission.status === 'assigned') {
+        const cleaner = allCleaners.find(c => c._id.toString() === mission.cleanerId.toString());
+        if (cleaner && cleaner.email) {
+          const dedupKeyJ0 = `reminder-0d-${missionId}`;
+          const subject = `[RAPPEL] Mission aujourd\'hui: ${mission.propertyId.toUpperCase()}`;
+          const html = `<p>Bonjour ${cleaner.name},</p><p>Ceci est un rappel pour votre mission à <strong>${mission.propertyId.toUpperCase()}</strong> aujourd\'hui.</p><p>N\'oubliez pas de la marquer comme \'Traitée\' une fois terminée.</p>`;
+          if (await sendEmailWithDedup(db, cleaner.email, subject, html, dedupKeyJ0)) {
+            report.reminders0d++;
           }
-          await emailLogs.insertOne({ to: "multiple-agents", subject: logKey, sentAt: new Date() });
+        }
+      }
+
+      // 3. ALERTE J-7 SI NON ASSIGNÉE
+      if (mission.date === in7DaysStr && !mission.cleanerId) {
+        const dedupKeyJ7 = `unassigned-7d-${missionId}`;
+        if (!(await emailLogs.findOne({ dedupKey: dedupKeyJ7 }))) {
+          const eligibleAgents = allCleaners.filter(c => c.assignedProperties.includes(mission.propertyId));
+          const subject = `[URGENT] Mission libre dans 7 jours : ${mission.propertyId.toUpperCase()}`;
+          const html = `<p>Bonjour,</p><p>La mission du <strong>${mission.date}</strong> pour <strong>${mission.propertyId.toUpperCase()}</strong> est toujours libre.</p>`;
+          if (eligibleAgents.length > 0) {
+             await Promise.all(eligibleAgents.map(agent => sendEmail(agent.email, subject, html)));
+          }
+          await sendEmail(ADMIN_EMAIL, subject, html); // Notifier aussi l'admin
+          await emailLogs.insertOne({ to: 'eligible-agents-and-admin', subject, sentAt: new Date(), dedupKey: dedupKeyJ7 });
           report.alerts7d++;
         }
       }
 
-      // 3. Alerte si dépassée et non traitée
-      const missionDate = new Date(m.date);
-      if (missionDate < today && m.status !== 'completed') {
-        const logKey = `overdue-alert-${m.id}`;
-        const alreadySent = await emailLogs.findOne({ subject: { $regex: logKey } });
-
-        if (!alreadySent) {
-          await sendEmail(ADMIN_EMAIL, `[ALERTE RETARD] Mission non traitée : ${m.propertyId.toUpperCase()}`, `
-            <p>La mission du <strong>${m.date}</strong> pour <strong>${m.propertyId}</strong> est en retard.</p>
-            <p>Statut actuel : ${m.status}</p>
-          `);
-          await emailLogs.insertOne({ to: ADMIN_EMAIL, subject: logKey, sentAt: new Date() });
-          report.overdue++;
+      // 4. ALERTE SI DÉPASSÉE
+      const missionDate = new Date(mission.date);
+      if (missionDate < today && mission.status !== 'completed') {
+        const dedupKeyOverdue = `overdue-alert-${missionId}`;
+        const subject = `[ALERTE RETARD] Mission non traitée : ${mission.propertyId.toUpperCase()}`;
+        const html = `<p>La mission du <strong>${mission.date}</strong> pour <strong>${mission.propertyId.toUpperCase()}</strong> est en retard. Statut actuel : ${mission.status}.</p>`;
+        if (await sendEmailWithDedup(db, ADMIN_EMAIL, subject, html, dedupKeyOverdue)) {
+          report.overdueAlerts++;
         }
       }
     }
+    
+    const totalSent = report.newMissionAlerts + report.reminders0d + report.alerts7d + report.overdueAlerts;
+    return res.status(200).json({ success: true, message: `Tâche de notification terminée. ${totalSent} lots d'alertes envoyés.`, report });
 
-    return res.status(200).json({ success: true, report });
   } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+    console.error("Erreur dans le cron de notifications:", error);
+    return res.status(500).json({ success: false, error: error.message });
   } finally {
     await client.close();
   }
