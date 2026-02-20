@@ -86,7 +86,7 @@ export default async function handler(req: any, res: any) {
     });
 
     let syncedAdded = 0, syncedUpdated = 0, syncedRemoved = 0;
-    let report = { reminders: 0, alerts7d: 0, newMissionsNotified: 0, purgedCount: purgeResult.deletedCount };
+    let report = { reminders: 0, alerts7d: 0, newMissionsNotified: 0, purgedCount: purgeResult.deletedCount, overdueAlerts: 0 };
 
     const currentCalendarUids: string[] = [];
 
@@ -149,23 +149,35 @@ export default async function handler(req: any, res: any) {
     if (isScheduledRun) {
       const allMissions = await missionsCol.find({ status: { $in: ['pending', 'assigned'] } }).toArray();
       for (const m of allMissions) {
+        // Rappel J-0
         if (m.date === todayStr && m.status === 'assigned' && m.cleanerId) {
           const cleaner = cleaners.find(c => c.id === m.cleanerId);
           if (cleaner?.email) {
             const dedupKey = `reminder-j0-${m.id}-${todayStr}`;
-            await sendEmailWithDedup(cleaner.email, `[RAPPEL] Mission aujourd'hui : ${m.propertyId.toUpperCase()}`, `<p>Bonjour ${cleaner.name}, rappel de votre mission aujourd'hui.</p>`, dedupKey, db);
+            await sendEmailWithDedup(cleaner.email, `[RAPPEL] Mission aujourd\'hui : ${m.propertyId.toUpperCase()}`, `<p>Bonjour ${cleaner.name}, rappel de votre mission aujourd\'hui.</p>`, dedupKey, db);
             report.reminders++;
           }
         }
+        // Alerte J-7
         if (m.date === in7DaysStr && m.status === 'pending') {
           const eligible = cleaners.filter(c => c.assignedProperties.includes(m.propertyId));
           for (const a of eligible) {
             if (a.email) {
               const dedupKey = `alert-j7-${m.id}-${a.id}`;
-              await sendEmailWithDedup(a.email, `[URGENT J-7] Mission toujours libre : ${m.propertyId.toUpperCase()}`, `<p>La mission du ${m.date} n'est toujours pas assignée.</p>`, dedupKey, db);
+              await sendEmailWithDedup(a.email, `[URGENT J-7] Mission toujours libre : ${m.propertyId.toUpperCase()}`, `<p>La mission du ${m.date} n\'est toujours pas assignée.</p>`, dedupKey, db);
             }
           }
           report.alerts7d++;
+        }
+        // Alerte de mission en retard
+        const missionDate = new Date(m.date);
+        if (missionDate < today && m.status !== 'completed') {
+            const dedupKey = `overdue-alert-${m.id}`;
+            const subject = `[ALERTE RETARD] Mission non traitée : ${m.propertyId.toUpperCase()}`;
+            const html = `<p>La mission du <strong>${m.date}</strong> pour <strong>${m.propertyId.toUpperCase()}</strong> est en retard. Statut actuel : ${m.status}.</p>`;
+            if (await sendEmailWithDedup(ADMIN_EMAIL, subject, html, dedupKey, db)) {
+                report.overdueAlerts++;
+            }
         }
       }
     }
