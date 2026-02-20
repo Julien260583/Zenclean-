@@ -1,6 +1,6 @@
 
 import { MongoClient, AnyBulkWriteOperation } from 'mongodb';
-import { sendEmail } from './lib/email'; // Correction de l'import
+import { sendEmail } from './lib/email';
 
 const uri = process.env.MONGODB_URI || "";
 const ADMIN_EMAIL = "mytoulhouse@gmail.com";
@@ -35,7 +35,7 @@ export default async function handler(req: any, res: any) {
             date: { $lt: twoMonthsAgo.toISOString().split('T')[0] }
         });
 
-        // --- 2. Synchronisation des calendriers (parallélisée) ---
+        // --- 2. Synchronisation des calendriers ---
         const calendarData = await Promise.all(PROPERTIES_CONFIG.map(async (prop) => {
             const icalUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(prop.calendarId)}/public/basic.ics`;
             const response = await fetch(icalUrl);
@@ -93,15 +93,18 @@ export default async function handler(req: any, res: any) {
             await missionsCol.bulkWrite(bulkOps);
         }
 
-        // --- 3. Préparation et envoi des notifications (parallélisé) ---
+        // --- 3. Préparation et envoi des notifications ---
         if (isScheduledRun) {
             const emailPromises: Promise<any>[] = [];
             const emailDedupKeys = new Set<string>();
 
-            const addEmailJob = (to: string, subject: string, html: string, dedupKey: string) => {
+            // Amélioration de la fonction d'archivage
+            const addEmailJob = (type: string, to: string, subject: string, html: string, dedupKey: string) => {
                 if (emailDedupKeys.has(dedupKey)) return;
                 emailPromises.push(sendEmail(to, subject, html).then(async (res) => {
-                    if (res && res.ok) await emailsCol.insertOne({ dedupKey, sentAt: new Date() });
+                    if (res && res.ok) {
+                        await emailsCol.insertOne({ type, to, subject, dedupKey, sentAt: new Date() });
+                    }
                 }));
                 emailDedupKeys.add(dedupKey);
             };
@@ -114,9 +117,7 @@ export default async function handler(req: any, res: any) {
                 const eligibleAgents = allCleaners.filter(c => c.assignedProperties.includes(mission.propertyId));
                 for (const agent of eligibleAgents) {
                     const dedupKey = `new-mission-${mission.id}-${agent.id}`;
-                    if (!emailDedupKeys.has(dedupKey)) {
-                       addEmailJob(agent.email, `[NOUVEAU] Mission : ${mission.propertyId.toUpperCase()} (${mission.date})`, `<p>Bonjour ${agent.name}, une mission est disponible pour ${mission.propertyId.toUpperCase()} le ${mission.date}.</p>`, dedupKey);
-                    }
+                    addEmailJob('new-mission', agent.email, `[NOUVEAU] Mission : ${mission.propertyId.toUpperCase()} (${mission.date})`, `<p>Bonjour ${agent.name}, une mission est disponible pour ${mission.propertyId.toUpperCase()} le ${mission.date}.</p>`, dedupKey);
                 }
             }
 
@@ -131,7 +132,7 @@ export default async function handler(req: any, res: any) {
                     const cleaner = allCleaners.find(c => c.id === mission.cleanerId);
                     if (cleaner?.email) {
                         const dedupKey = `reminder-j0-${mission.id}-${todayStr}`;
-                        addEmailJob(cleaner.email, `[RAPPEL] Mission aujourd'hui : ${mission.propertyId.toUpperCase()}`, `<p>Bonjour ${cleaner.name}, rappel de votre mission aujourd'hui.</p>`, dedupKey);
+                        addEmailJob('reminder-j0', cleaner.email, `[RAPPEL] Mission aujourd'hui : ${mission.propertyId.toUpperCase()}`, `<p>Bonjour ${cleaner.name}, rappel de votre mission aujourd'hui.</p>`, dedupKey);
                     }
                 }
                 // Alerte J-7
@@ -139,7 +140,7 @@ export default async function handler(req: any, res: any) {
                     const eligible = allCleaners.filter(c => c.assignedProperties.includes(mission.propertyId));
                     for (const agent of eligible) {
                         const dedupKey = `alert-j7-${mission.id}-${agent.id}`;
-                        addEmailJob(agent.email, `[URGENT J-7] Mission toujours libre : ${mission.propertyId.toUpperCase()}`, `<p>La mission du ${mission.date} n'est toujours pas assignée.</p>`, dedupKey);
+                        addEmailJob('alert-j7', agent.email, `[URGENT J-7] Mission toujours libre : ${mission.propertyId.toUpperCase()}`, `<p>La mission du ${mission.date} n'est toujours pas assignée.</p>`, dedupKey);
                     }
                 }
             }
@@ -148,7 +149,7 @@ export default async function handler(req: any, res: any) {
             const overdueMissions = await missionsCol.find({ status: { $ne: 'completed' }, date: { $lt: todayStr } }).toArray();
             for (const mission of overdueMissions) {
                 const dedupKey = `overdue-alert-${mission.id}`;
-                 addEmailJob(ADMIN_EMAIL, `[ALERTE RETARD] Mission non traitée : ${mission.propertyId.toUpperCase()}`, `<p>La mission du <strong>${mission.date}</strong> pour <strong>${mission.propertyId.toUpperCase()}</strong> est en retard. Statut actuel : ${mission.status}.</p>`, dedupKey);
+                 addEmailJob('overdue-alert', ADMIN_EMAIL, `[ALERTE RETARD] Mission non traitée : ${mission.propertyId.toUpperCase()}`, `<p>La mission du <strong>${mission.date}</strong> pour <strong>${mission.propertyId.toUpperCase()}</strong> est en retard. Statut actuel : ${mission.status}.</p>`, dedupKey);
             }
 
             await Promise.all(emailPromises);

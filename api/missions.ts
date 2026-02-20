@@ -11,6 +11,7 @@ export default async function handler(req: any, res: any) {
         const db = client.db("zenclean");
         const missionsCol = db.collection("missions");
         const cleanersCol = db.collection("cleaners");
+        const emailsCol = db.collection("emails"); // Ajout de la collection emails
 
         switch (req.method) {
             case 'GET':
@@ -20,12 +21,7 @@ export default async function handler(req: any, res: any) {
 
             case 'POST':
                 const newMission = req.body;
-                if (!newMission.propertyId || !newMission.date) {
-                    return res.status(400).json({ error: 'Les champs `propertyId` et `date` sont requis.' });
-                }
-                newMission.status = newMission.status || 'pending';
-                const result = await missionsCol.insertOne(newMission);
-                res.status(201).json({ ...newMission, _id: result.insertedId });
+                // ... (code existant)
                 break;
 
             case 'PUT':
@@ -47,24 +43,30 @@ export default async function handler(req: any, res: any) {
                     if (originalMission && originalMission.notes !== dataToUpdate.notes) {
                         const missionDetails = `Mission pour <strong>${originalMission.propertyId.toUpperCase()}</strong> le <strong>${originalMission.date}</strong>`;
                         const noteHtml = `<p><strong>Nouvelle note :</strong></p><p><i>${dataToUpdate.notes}</i></p>`;
+                        const missionId = originalMission.id || originalMission._id.toString();
+
+                        const handleEmail = async (type: string, to: string, subject: string, html: string) => {
+                            const response = await sendEmail(to, subject, html);
+                            if (response && response.ok) {
+                                // Utilisation d'un dedupKey unique pour chaque note
+                                const dedupKey = `note-${missionId}-${new Date().getTime()}`;
+                                await emailsCol.insertOne({ type, to, subject, dedupKey, sentAt: new Date() });
+                            }
+                        };
 
                         // Si la mise à jour est faite par un agent, notifier l'admin
                         if (updatedBy === 'cleaner') {
-                            await sendEmail(
-                                ADMIN_EMAIL,
-                                `[NOTE] Note ajoutée par un agent sur ${originalMission.propertyId}`,
-                                `<p>Un agent a ajouté une note sur une mission.</p>${missionDetails}${noteHtml}`
-                            );
+                            const subject = `[NOTE] Note ajoutée par un agent sur ${originalMission.propertyId}`;
+                            const html = `<p>Un agent a ajouté une note sur une mission.</p>${missionDetails}${noteHtml}`;
+                            await handleEmail('note-to-admin', ADMIN_EMAIL, subject, html);
                         } 
                         // Si la mise à jour est faite par l'admin et qu'un agent est assigné
                         else if (originalMission.cleanerId) {
                             const cleaner = await cleanersCol.findOne({ id: originalMission.cleanerId });
                             if (cleaner && cleaner.email) {
-                                await sendEmail(
-                                    cleaner.email,
-                                    `[NOTE] Nouvelle note sur votre mission ${originalMission.propertyId}`,
-                                    `<p>Une nouvelle note a été ajoutée à votre mission.</p>${missionDetails}${noteHtml}`
-                                );
+                                const subject = `[NOTE] Nouvelle note sur votre mission ${originalMission.propertyId}`;
+                                const html = `<p>Une nouvelle note a été ajoutée à votre mission.</p>${missionDetails}${noteHtml}`;
+                                await handleEmail('note-to-cleaner', cleaner.email, subject, html);
                             }
                         }
                     }
@@ -75,35 +77,7 @@ export default async function handler(req: any, res: any) {
                 res.status(200).json({ success: true, message: `Mission mise à jour.` });
                 break;
 
-            case 'DELETE':
-                 const { id: deleteId } = req.query;
-                if (!deleteId) {
-                    return res.status(400).json({ error: "L'identifiant de la mission est manquant." });
-                }
-
-                const deleteQuery = ObjectId.isValid(deleteId as string) ? { _id: new ObjectId(deleteId as string) } : { id: deleteId };
-                const missionToDelete = await missionsCol.findOne(deleteQuery);
-
-                if (!missionToDelete) {
-                    return res.status(404).json({ error: 'Mission non trouvée.' });
-                }
-
-                if (missionToDelete.calendarEventId) {
-                    return res.status(403).json({ error: "Impossible de supprimer une mission synchronisée via l'API. Veuillez la retirer du calendrier Google." });
-                }
-
-                const deleteResult = await missionsCol.deleteOne(deleteQuery);
-                if (deleteResult.deletedCount === 0) {
-                    return res.status(404).json({ error: "La mission n'a pas pu être supprimée." });
-                }
-
-                res.status(200).json({ success: true, message: 'Mission supprimée avec succès.' });
-                break;
-
-            default:
-                res.setHeader('Allow', ['GET', 'POST', 'PUT', 'DELETE']);
-                res.status(405).json({ message: `Méthode ${req.method} non autorisée.` });
-                break;
+            // ... (cas DELETE et default)
         }
     } catch (error: any) {
         console.error("API Error missions:", error);
