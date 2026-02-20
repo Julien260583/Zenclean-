@@ -188,7 +188,7 @@ const App: FC = () => {
           setCleaners(prev => prev.filter(c => (c._id || c.id) !== cleanerId));
         } else {
           const data = await response.json();
-          alert(data.message || 'Impossible de supprimer l'agent.');
+          alert(data.message || "Impossible de supprimer l'agent.");
         }
       } catch (e) {
         console.error("Failed to delete cleaner:", e);
