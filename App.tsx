@@ -80,22 +80,40 @@ const LogoComponent: React.FC<{ size?: 'sm' | 'lg' }> = ({ size = 'lg' }) => {
   );
 };
 
-const Login: React.FC<{ onLogin: (user: 'admin' | Cleaner) => void, cleaners: Cleaner[] }> = ({ onLogin, cleaners }) => {
+const Login: React.FC<{ onLogin: (user: 'admin' | Cleaner) => void }> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
       onLogin('admin');
       return;
     }
-    const agent = cleaners.find(c => c.email === email && c.password === password);
-    if (agent) {
-      onLogin(agent);
-    } else {
-      setError('Identifiants incorrects. Veuillez réessayer.');
+
+    setIsLoggingIn(true);
+    setError('');
+
+    try {
+      const response = await fetch('/api/cleaners');
+      if (!response.ok) {
+        throw new Error('Could not fetch cleaners list');
+      }
+      const allCleaners: Cleaner[] = await response.json();
+      const agent = allCleaners.find(c => c.email === email && c.password === password);
+      
+      if (agent) {
+        onLogin(agent);
+      } else {
+        setError('Identifiants incorrects. Veuillez réessayer.');
+      }
+    } catch (err) {
+      console.error("Login error:", err);
+      setError('Erreur de connexion. Veuillez réessayer.');
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -118,6 +136,7 @@ const Login: React.FC<{ onLogin: (user: 'admin' | Cleaner) => void, cleaners: Cl
                   className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-2 focus:ring-orange-400 transition-all outline-none"
                   placeholder="exemple@gmail.com"
                   required
+                  disabled={isLoggingIn}
                 />
               </div>
             </div>
@@ -132,6 +151,7 @@ const Login: React.FC<{ onLogin: (user: 'admin' | Cleaner) => void, cleaners: Cl
                   className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-2 focus:ring-orange-400 transition-all outline-none"
                   placeholder="••••••••"
                   required
+                  disabled={isLoggingIn}
                 />
               </div>
             </div>
@@ -140,7 +160,13 @@ const Login: React.FC<{ onLogin: (user: 'admin' | Cleaner) => void, cleaners: Cl
                 <AlertCircle size={16} /> {error}
               </div>
             )}
-            <button type="submit" className="w-full bg-[#1A2D42] text-white font-bold py-4 rounded-2xl hover:bg-slate-800 shadow-xl shadow-slate-200 transition-all active:scale-[0.98] mt-4 tracking-widest uppercase text-sm">Se connecter</button>
+            <button 
+              type="submit" 
+              className="w-full bg-[#1A2D42] text-white font-bold py-4 rounded-2xl hover:bg-slate-800 shadow-xl shadow-slate-200 transition-all active:scale-[0.98] mt-4 tracking-widest uppercase text-sm disabled:opacity-50"
+              disabled={isLoggingIn}
+            >
+              {isLoggingIn ? 'Connexion...' : 'Se connecter'}
+            </button>
           </form>
         </div>
       </div>
@@ -172,7 +198,11 @@ const App: React.FC = () => {
 
   const isAdmin = currentUser === 'admin';
 
-  useEffect(() => { loadInitialData(); }, []);
+  useEffect(() => { 
+    if (currentUser) {
+      loadInitialData(); 
+    }
+  }, [currentUser]);
 
   const loadInitialData = async () => {
     setIsLoading(true);
@@ -222,12 +252,32 @@ const App: React.FC = () => {
     }
   };
 
+ const handleDeleteCleaner = async (cleaner: Cleaner) => {
+    if (window.confirm(`Êtes-vous sûr de vouloir supprimer l'agent ${cleaner.name} ? Cette action est irréversible.`)) {
+      try {
+        const response = await fetch(`/api/cleaners?id=${cleaner.id}`, {
+          method: 'DELETE',
+        });
+
+        if (response.ok) {
+          setCleaners(prevCleaners => prevCleaners.filter(c => c.id !== cleaner.id));
+        } else {
+          console.error('Failed to delete cleaner on the server.');
+          // You could show an error message to the user here
+        }
+      } catch (e) {
+        console.error("Failed to delete cleaner:", e);
+      }
+    }
+  };
+
  const handleUpdateMission = async (mission: Mission) => {
     const missionIdKey = mission._id ? '_id' : 'id';
     const missionId = mission[missionIdKey];
 
     const prevMission = missions.find(m => (m._id || m.id) === missionId);
     const isCompleting = mission.status === 'completed' && prevMission?.status !== 'completed';
+    const noteChanged = mission.notes !== prevMission?.notes && mission.notes; // Make sure note is not empty
 
     if (mission.cleanerId && mission.status === 'pending') {
       mission.status = 'assigned';
@@ -244,6 +294,53 @@ const App: React.FC = () => {
         body: JSON.stringify(mission)
       });
 
+      // --- Notifications Logic ---
+
+      // 1. Note has changed
+      if (noteChanged) {
+        const subject = `[Note] Mission ${mission.propertyId.toUpperCase()} du ${mission.date}`;
+        const html = `<p>Une nouvelle note a été ajoutée à la mission pour <strong>${mission.propertyId.toUpperCase()}</strong> du <strong>${mission.date}</strong>.</p><p><strong>Note :</strong></p><p style="padding:10px; border-left: 3px solid #eee; background:#f9f9f9;">${mission.notes}</p>`;
+
+        if (!isAdmin) {
+          // Agent added a note, notify admin
+          fetch('/api/notify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: ADMIN_EMAIL,
+              subject: `${subject} par ${(currentUser as Cleaner).name}`,
+              dedupKey: `note-${missionId}-${(currentUser as Cleaner).id}`,
+              html
+            })
+          });
+        } else {
+          // Admin added a note
+          if (mission.cleanerId) {
+            // Mission is assigned, notify the agent
+            const agent = cleaners.find(c => c.id === mission.cleanerId);
+            if (agent?.email) {
+              fetch('/api/notify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ to: agent.email, subject, html, dedupKey: `note-${missionId}-admin` })
+              });
+            }
+          } else {
+            // Mission is unassigned, notify all eligible agents
+            const eligibleAgents = cleaners.filter(c => c.assignedProperties.includes(mission.propertyId));
+            const emails = eligibleAgents.map(c => c.email).filter(Boolean); // Filter out any falsy email values
+            if (emails.length > 0) {
+               fetch('/api/notify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ to: emails, subject, html, dedupKey: `note-${missionId}-admin-unassigned` })
+              });
+            }
+          }
+        }
+      }
+
+      // 2. Mission is completed
       if (isCompleting && !isAdmin) {
         const cleaner = cleaners.find(c => c.id === mission.cleanerId);
         fetch('/api/notify', {
@@ -258,6 +355,7 @@ const App: React.FC = () => {
         });
       }
       
+      // 3. Mission is assigned
       if (mission.cleanerId && (!prevMission || prevMission.cleanerId !== mission.cleanerId)) {
         const cleaner = cleaners.find(c => c.id === mission.cleanerId);
         if (cleaner?.email) {
@@ -326,8 +424,8 @@ const App: React.FC = () => {
     setActiveTab(user === 'admin' ? 'dashboard' : 'missions');
   };
 
+  if (!currentUser) return <Login onLogin={handleLogin} />;
   if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><RefreshCw className="animate-spin text-orange-500" size={48} /></div>;
-  if (!currentUser) return <Login onLogin={handleLogin} cleaners={cleaners} />;
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-800">
@@ -373,7 +471,11 @@ const App: React.FC = () => {
                <p className="text-xs font-bold text-slate-900">{isAdmin ? "Administrateur" : (currentUser as Cleaner).name}</p>
                <p className="text-[10px] text-slate-400">En ligne</p>
              </div>
-             <div className="w-8 h-8 rounded-full bg-slate-100 border flex items-center justify-center text-slate-400"><Users size={18} /></div>
+             {isAdmin ? (
+                <div className="w-8 h-8 rounded-full bg-slate-100 border flex items-center justify-center text-slate-400"><Users size={18} /></div>
+              ) : (
+                <img src={(currentUser as Cleaner).avatar} className="w-8 h-8 rounded-full object-cover border" alt="Avatar" />
+              )}
           </div>
         </header>
 
@@ -405,7 +507,7 @@ const App: React.FC = () => {
                     Nouvel Agent
                   </button>
                 </div>
-                <StaffGridView cleaners={cleaners} onEdit={setEditingCleaner} />
+                <StaffGridView cleaners={cleaners} onEdit={setEditingCleaner} onDelete={handleDeleteCleaner} />
               </div>
             )}
             {activeTab === 'finance' && <FinanceView missions={missions} cleaners={cleaners} />}
@@ -902,10 +1004,16 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
                {isSyncing ? "Sync..." : "Synchroniser les missions"}
              </button>
           ) : (
-            <button onClick={onCreateMission} className="bg-orange-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-lg shadow-orange-100 transition-all active:scale-95">
-              <Plus size={16}/>
-              Créer une mission
-            </button>
+            <>
+              <button onClick={onSync} disabled={isSyncing} className="flex items-center gap-2 bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl font-bold text-sm shadow-sm hover:shadow-md transition-all active:scale-95 disabled:opacity-50">
+                  {isSyncing ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                  Rafraîchir
+              </button>
+              <button onClick={onCreateMission} className="bg-orange-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shadow-lg shadow-orange-100 transition-all active:scale-95">
+                <Plus size={16}/>
+                Créer une mission
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -1000,8 +1108,8 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
                             <Trash2 size={18} />
                         </button>
                     )}
-                    {isAdmin && (
-                      <button onClick={() => onEditNote(m)} className="p-2 text-slate-400 hover:text-[#1A2D42] transition-colors" title="Ajouter une note">
+                    {(isAdmin || m.cleanerId === currentCleaner?.id) && (
+                      <button onClick={() => onEditNote(m)} className="p-2 text-slate-400 hover:text-[#1A2D42] transition-colors" title="Ajouter/Modifier une note">
                         <MessageSquare size={18} />
                       </button>
                     )}
@@ -1022,7 +1130,7 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
   );
 };
 
-const StaffGridView = ({ cleaners, onEdit }: any) => {
+const StaffGridView = ({ cleaners, onEdit, onDelete }: any) => {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {cleaners.map((c: any) => (
@@ -1031,12 +1139,20 @@ const StaffGridView = ({ cleaners, onEdit }: any) => {
             <div className="flex items-center gap-4">
               <div className="relative">
                 <img src={c.avatar} className="w-16 h-16 rounded-2xl object-cover ring-4 ring-slate-50 group-hover:ring-orange-100 transition-all" alt="" />
-                <button 
-                  onClick={() => onEdit(c)}
-                  className="absolute -bottom-2 -right-2 bg-white p-1.5 rounded-lg border shadow-sm text-[#1A2D42] hover:bg-slate-50 transition-colors"
-                >
-                  <Edit2 size={14} />
-                </button>
+                <div className="absolute -bottom-2 -right-2 flex items-center gap-1">
+                  <button 
+                    onClick={() => onEdit(c)}
+                    className="bg-white p-1.5 rounded-lg border shadow-sm text-[#1A2D42] hover:bg-slate-50 transition-colors"
+                  >
+                    <Edit2 size={14} />
+                  </button>
+                  <button 
+                    onClick={() => onDelete(c)}
+                    className="bg-white p-1.5 rounded-lg border shadow-sm text-red-500 hover:bg-red-50 transition-colors"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
               <div>
                 <h4 className="font-black text-slate-900 uppercase text-sm leading-tight">{c.name}</h4>
