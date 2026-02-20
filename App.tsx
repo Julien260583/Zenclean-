@@ -43,8 +43,8 @@ import {
   FileText,
   Trash2
 } from 'lucide-react';
-import { PROPERTIES, INITIAL_CLEANERS } from './constants.ts';
-import { Property, Cleaner, Mission, PropertyKey } from './types.ts';
+import { PROPERTIES, INITIAL_CLEANERS } from './constants';
+import { Property, Cleaner, Mission, PropertyKey } from './types';
 
 const ADMIN_EMAIL = "mytoulhouse@gmail.com";
 const ADMIN_PASSWORD = "bWInnRDFbs2R7XnfEv3g";
