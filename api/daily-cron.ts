@@ -1,5 +1,5 @@
 
-import { MongoClient } from 'mongodb';
+import { MongoClient, AnyBulkWriteOperation } from 'mongodb';
 
 const uri = process.env.MONGODB_URI || "";
 const ADMIN_EMAIL = "mytoulhouse@gmail.com";
@@ -13,184 +13,179 @@ const PROPERTIES_CONFIG = [
   { id: 'spa', calendarId: '7cd6b0882eec615ff72afba17915838e642c24c06ba1a96eee824da01b40cb0b@group.calendar.google.com' }
 ];
 
-async function sendEmailWithDedup(to: string, subject: string, html: string, dedupKey: string, db: any) {
-  if (!MAILJET_API_KEY || !MAILJET_SECRET_KEY) return;
-  
-  const alreadySent = await db.collection("emails").findOne({ dedupKey });
-  if (alreadySent) {
-    console.log(`Email ignoré (déjà envoyé) : ${dedupKey}`);
-    return null;
-  }
-
-  const auth = btoa(`${MAILJET_API_KEY}:${MAILJET_SECRET_KEY}`);
-  
-  try {
-    const response = await fetch('https://api.mailjet.com/v3.1/send', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${auth}`
-      },
-      body: JSON.stringify({
-        Messages: [{
-          From: { Email: "mytoulhouse@gmail.com", Name: "My Toul'House" },
-          To: [{ Email: to }],
-          Subject: subject,
-          HTMLPart: html
-        }]
-      })
-    });
-
-    if (response.ok) {
-      await db.collection("emails").insertOne({
-        to,
-        subject,
-        html,
-        dedupKey,
-        sentAt: new Date(),
-        status: 'success',
-        source: 'sync-engine'
-      });
+async function sendEmail(to: string, subject: string, html: string): Promise<Response | undefined> {
+    if (!MAILJET_API_KEY || !MAILJET_SECRET_KEY) return;
+    const auth = btoa(`${MAILJET_API_KEY}:${MAILJET_SECRET_KEY}`);
+    try {
+        return await fetch('https://api.mailjet.com/v3.1/send', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Basic ${auth}`
+            },
+            body: JSON.stringify({
+                Messages: [{
+                    From: { Email: "mytoulhouse@gmail.com", Name: "My Toul'House" },
+                    To: [{ Email: to }],
+                    Subject: subject,
+                    HTMLPart: html
+                }]
+            })
+        });
+    } catch (e) {
+        console.error("Erreur envoi email:", e);
     }
-    return response;
-  } catch (e) {
-    console.error("Erreur envoi email dedup:", e);
-  }
 }
 
+
 export default async function handler(req: any, res: any) {
-  const client = new MongoClient(uri);
-  const isScheduledRun = req.query.schedule === 'true';
+    const client = new MongoClient(uri);
+    const isScheduledRun = req.query.schedule === 'true';
 
-  try {
-    await client.connect();
-    const db = client.db("zenclean");
-    const missionsCol = db.collection("missions");
-    const cleanersCol = db.collection("cleaners");
-    const cleaners = await cleanersCol.find({}).toArray();
+    try {
+        await client.connect();
+        const db = client.db("zenclean");
+        const missionsCol = db.collection("missions");
+        const cleanersCol = db.collection("cleaners");
+        const emailsCol = db.collection("emails");
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString().split('T')[0];
-    const in7Days = new Date();
-    in7Days.setDate(today.getDate() + 7);
-    const in7DaysStr = in7Days.toISOString().split('T')[0];
-
-    const twoMonthsAgo = new Date();
-    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
-    const twoMonthsAgoStr = twoMonthsAgo.toISOString().split('T')[0];
-    
-    const purgeResult = await missionsCol.deleteMany({
-      status: 'completed',
-      date: { $lt: twoMonthsAgoStr }
-    });
-
-    let syncedAdded = 0, syncedUpdated = 0, syncedRemoved = 0;
-    let report = { reminders: 0, alerts7d: 0, newMissionsNotified: 0, purgedCount: purgeResult.deletedCount, overdueAlerts: 0 };
-
-    const currentCalendarUids: string[] = [];
-
-    for (const prop of PROPERTIES_CONFIG) {
-      const icalUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(prop.calendarId)}/public/basic.ics`;
-      const response = await fetch(icalUrl);
-      if (!response.ok) continue;
-      const icalData = await response.text();
-      const events = icalData.split('BEGIN:VEVENT');
-      events.shift();
-
-      for (const eventStr of events) {
-        const dtEndMatch = eventStr.match(/DTEND(?:;VALUE=DATE)?:(\d{8})/);
-        const uidMatch = eventStr.match(/UID:(.*)/);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayStr = today.toISOString().split('T')[0];
         
-        if (dtEndMatch && dtEndMatch[1]) {
-          const rawDate = dtEndMatch[1];
-          const formattedDate = `${rawDate.substring(0, 4)}-${rawDate.substring(4, 6)}-${rawDate.substring(6, 8)}`;
-          const uid = uidMatch ? uidMatch[1].trim() : `cal-${prop.id}-${rawDate}`;
-          const missionId = `cal-${uid}`;
-          
-          currentCalendarUids.push(uid);
+        // --- 1. Nettoyage des anciennes missions ---
+        const twoMonthsAgo = new Date();
+        twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+        const purgeResult = await missionsCol.deleteMany({
+            status: 'completed',
+            date: { $lt: twoMonthsAgo.toISOString().split('T')[0] }
+        });
 
-          if (formattedDate >= todayStr) {
-            const existing = await missionsCol.findOne({ id: missionId });
-            
-            if (!existing) {
-              const newMission = {
-                id: missionId, calendarEventId: uid, propertyId: prop.id, date: formattedDate,
-                status: 'pending', notes: ""
-              };
-              await missionsCol.insertOne(newMission);
-              syncedAdded++;
+        // --- 2. Synchronisation des calendriers (parallélisée) ---
+        const calendarData = await Promise.all(PROPERTIES_CONFIG.map(async (prop) => {
+            const icalUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(prop.calendarId)}/public/basic.ics`;
+            const response = await fetch(icalUrl);
+            if (!response.ok) return { prop, events: [] };
+            const icalData = await response.text();
+            const events = icalData.split('BEGIN:VEVENT').slice(1);
+            return { prop, events };
+        }));
 
-              const eligibleAgents = cleaners.filter(c => c.assignedProperties.includes(prop.id as any));
-              for (const agent of eligibleAgents) {
-                if (agent.email) {
-                  const dedupKey = `new-mission-${missionId}-${agent.id}`;
-                  await sendEmailWithDedup(agent.email, `[NOUVEAU] Mission : ${prop.id.toUpperCase()} (${formattedDate})`, `<p>Bonjour ${agent.name}, une mission est disponible pour ${prop.id.toUpperCase()} le ${formattedDate}.</p>`, dedupKey, db);
+        const allCleaners = await cleanersCol.find({ email: { $exists: true, $ne: '' } }).toArray();
+        const existingMissions = await missionsCol.find({}).toArray();
+        const existingMissionsMap = new Map(existingMissions.map(m => [m.id, m]));
+
+        const bulkOps: AnyBulkWriteOperation[] = [];
+        const newMissionsForNotif: any[] = [];
+        let currentCalendarUids: string[] = [];
+
+        for (const { prop, events } of calendarData) {
+            for (const eventStr of events) {
+                const dtEndMatch = eventStr.match(/DTEND(?:;VALUE=DATE)?:(\d{8})/);
+                const uidMatch = eventStr.match(/UID:(.*)/);
+                if (!dtEndMatch || !uidMatch) continue;
+
+                const rawDate = dtEndMatch[1];
+                const formattedDate = `${rawDate.substring(0, 4)}-${rawDate.substring(4, 6)}-${rawDate.substring(6, 8)}`;
+                const uid = uidMatch[1].trim();
+                const missionId = `cal-${uid}`;
+                currentCalendarUids.push(uid);
+
+                if (formattedDate < todayStr) continue;
+
+                const existing = existingMissionsMap.get(missionId);
+                if (!existing) {
+                    const newMission = {
+                        id: missionId, calendarEventId: uid, propertyId: prop.id, date: formattedDate,
+                        status: 'pending', notes: ""
+                    };
+                    bulkOps.push({ insertOne: { document: newMission } });
+                    newMissionsForNotif.push(newMission);
+                } else if (existing.date !== formattedDate) {
+                    bulkOps.push({ updateOne: { filter: { id: missionId }, update: { $set: { date: formattedDate } } } });
                 }
-              }
-              report.newMissionsNotified++;
-            } else if (existing.date !== formattedDate) {
-              await missionsCol.updateOne({ id: missionId }, { $set: { date: formattedDate } });
-              syncedUpdated++;
-            }
-          }
-        }
-      }
-    }
-
-    const futureMissionsFromCal = await missionsCol.find({ calendarEventId: { $exists: true }, date: { $gte: todayStr } }).toArray();
-    for (const m of futureMissionsFromCal) {
-      if (m.calendarEventId && !currentCalendarUids.includes(m.calendarEventId)) {
-        await missionsCol.deleteOne({ id: m.id });
-        syncedRemoved++;
-      }
-    }
-
-    if (isScheduledRun) {
-      const allMissions = await missionsCol.find({ status: { $in: ['pending', 'assigned'] } }).toArray();
-      for (const m of allMissions) {
-        // Rappel J-0
-        if (m.date === todayStr && m.status === 'assigned' && m.cleanerId) {
-          const cleaner = cleaners.find(c => c.id === m.cleanerId);
-          if (cleaner?.email) {
-            const dedupKey = `reminder-j0-${m.id}-${todayStr}`;
-            await sendEmailWithDedup(cleaner.email, `[RAPPEL] Mission aujourd\'hui : ${m.propertyId.toUpperCase()}`, `<p>Bonjour ${cleaner.name}, rappel de votre mission aujourd\'hui.</p>`, dedupKey, db);
-            report.reminders++;
-          }
-        }
-        // Alerte J-7
-        if (m.date === in7DaysStr && m.status === 'pending') {
-          const eligible = cleaners.filter(c => c.assignedProperties.includes(m.propertyId));
-          for (const a of eligible) {
-            if (a.email) {
-              const dedupKey = `alert-j7-${m.id}-${a.id}`;
-              await sendEmailWithDedup(a.email, `[URGENT J-7] Mission toujours libre : ${m.propertyId.toUpperCase()}`, `<p>La mission du ${m.date} n\'est toujours pas assignée.</p>`, dedupKey, db);
-            }
-          }
-          report.alerts7d++;
-        }
-        // Alerte de mission en retard
-        const missionDate = new Date(m.date);
-        if (missionDate < today && m.status !== 'completed') {
-            const dedupKey = `overdue-alert-${m.id}`;
-            const subject = `[ALERTE RETARD] Mission non traitée : ${m.propertyId.toUpperCase()}`;
-            const html = `<p>La mission du <strong>${m.date}</strong> pour <strong>${m.propertyId.toUpperCase()}</strong> est en retard. Statut actuel : ${m.status}.</p>`;
-            if (await sendEmailWithDedup(ADMIN_EMAIL, subject, html, dedupKey, db)) {
-                report.overdueAlerts++;
             }
         }
-      }
-    }
+        
+        const missionsToDelete = existingMissions
+            .filter(m => m.calendarEventId && m.date >= todayStr && !currentCalendarUids.includes(m.calendarEventId))
+            .map(m => m.id);
 
-    return res.status(200).json({ 
-      success: true, 
-      sync: { added: syncedAdded, updated: syncedUpdated, removed: syncedRemoved },
-      notifications: report,
-      purge: { deletedCount: report.purgedCount, threshold: twoMonthsAgoStr }
-    });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
-  } finally {
-    await client.close();
-  }
+        if (missionsToDelete.length > 0) {
+            bulkOps.push({ deleteMany: { filter: { id: { $in: missionsToDelete } } } });
+        }
+
+        if (bulkOps.length > 0) {
+            await missionsCol.bulkWrite(bulkOps);
+        }
+
+        // --- 3. Préparation et envoi des notifications (parallélisé) ---
+        if (isScheduledRun) {
+            const emailPromises: Promise<any>[] = [];
+            const emailDedupKeys = new Set<string>();
+
+            const addEmailJob = (to: string, subject: string, html: string, dedupKey: string) => {
+                if (emailDedupKeys.has(dedupKey)) return;
+                emailPromises.push(sendEmail(to, subject, html).then(async (res) => {
+                    if (res && res.ok) await emailsCol.insertOne({ dedupKey, sentAt: new Date() });
+                }));
+                emailDedupKeys.add(dedupKey);
+            };
+            
+            const sentEmails = await emailsCol.find({ dedupKey: { $regex: '.*' } }).project({ dedupKey: 1 }).toArray();
+            sentEmails.forEach(e => emailDedupKeys.add(e.dedupKey));
+
+            // Notifications pour les nouvelles missions
+            for (const mission of newMissionsForNotif) {
+                const eligibleAgents = allCleaners.filter(c => c.assignedProperties.includes(mission.propertyId));
+                for (const agent of eligibleAgents) {
+                    const dedupKey = `new-mission-${mission.id}-${agent.id}`;
+                    if (!emailDedupKeys.has(dedupKey)) {
+                       addEmailJob(agent.email, `[NOUVEAU] Mission : ${mission.propertyId.toUpperCase()} (${mission.date})`, `<p>Bonjour ${agent.name}, une mission est disponible pour ${mission.propertyId.toUpperCase()} le ${mission.date}.</p>`, dedupKey);
+                    }
+                }
+            }
+
+            const missionsForReminders = await missionsCol.find({ status: { $in: ['pending', 'assigned'] }, date: { $gte: todayStr } }).toArray();
+            const in7Days = new Date();
+            in7Days.setDate(today.getDate() + 7);
+            const in7DaysStr = in7Days.toISOString().split('T')[0];
+            
+            for (const mission of missionsForReminders) {
+                // Rappel J-0
+                if (mission.date === todayStr && mission.status === 'assigned' && mission.cleanerId) {
+                    const cleaner = allCleaners.find(c => c.id === mission.cleanerId);
+                    if (cleaner?.email) {
+                        const dedupKey = `reminder-j0-${mission.id}-${todayStr}`;
+                        addEmailJob(cleaner.email, `[RAPPEL] Mission aujourd'hui : ${mission.propertyId.toUpperCase()}`, `<p>Bonjour ${cleaner.name}, rappel de votre mission aujourd'hui.</p>`, dedupKey);
+                    }
+                }
+                // Alerte J-7
+                if (mission.date === in7DaysStr && mission.status === 'pending') {
+                    const eligible = allCleaners.filter(c => c.assignedProperties.includes(mission.propertyId));
+                    for (const agent of eligible) {
+                        const dedupKey = `alert-j7-${mission.id}-${agent.id}`;
+                        addEmailJob(agent.email, `[URGENT J-7] Mission toujours libre : ${mission.propertyId.toUpperCase()}`, `<p>La mission du ${mission.date} n'est toujours pas assignée.</p>`, dedupKey);
+                    }
+                }
+            }
+            
+            // Alerte missions en retard
+            const overdueMissions = await missionsCol.find({ status: { $ne: 'completed' }, date: { $lt: todayStr } }).toArray();
+            for (const mission of overdueMissions) {
+                const dedupKey = `overdue-alert-${mission.id}`;
+                 addEmailJob(ADMIN_EMAIL, `[ALERTE RETARD] Mission non traitée : ${mission.propertyId.toUpperCase()}`, `<p>La mission du <strong>${mission.date}</strong> pour <strong>${mission.propertyId.toUpperCase()}</strong> est en retard. Statut actuel : ${mission.status}.</p>`, dedupKey);
+            }
+
+            await Promise.all(emailPromises);
+        }
+
+        return res.status(200).json({ success: true, message: "Cron job finished successfully." });
+
+    } catch (error: any) {
+        console.error("Cron Error:", error);
+        return res.status(500).json({ success: false, error: error.message });
+    } finally {
+        await client.close();
+    }
 }
