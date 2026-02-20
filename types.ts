@@ -14,6 +14,7 @@ export interface Cleaner {
   id: string;
   name: string;
   email: string;
+  phone?: string;
   password?: string;
   avatar: string;
   assignedProperties: PropertyKey[];
