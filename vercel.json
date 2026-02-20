@@ -1,0 +1,20 @@
+
+{
+  "version": 2,
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/daily-cron?schedule=true",
+      "schedule": "0 8 * * *"
+    }
+  ]
+}
