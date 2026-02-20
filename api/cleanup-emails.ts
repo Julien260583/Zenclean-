@@ -1,5 +1,5 @@
 
-import clientPromise from '../lib/mongodb';
+import clientPromise from '../lib/mongodb.js';
 
 export default async function handler(req: any, res: any) {
     if (req.method !== 'POST') {
