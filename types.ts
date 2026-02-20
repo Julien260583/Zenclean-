@@ -15,7 +15,6 @@ export interface Cleaner {
   name: string;
   email: string;
   password?: string;
-  phone?: string;
   avatar: string;
   assignedProperties: PropertyKey[];
   propertyRates: Record<string, number>; // Coût par appartement
@@ -23,6 +22,7 @@ export interface Cleaner {
 
 export interface Mission {
   id: string;
+  _id?: string; // ID MongoDB
   propertyId: PropertyKey;
   cleanerId?: string;
   date: string;

@@ -40,7 +40,8 @@ import {
   Camera,
   Image as ImageIcon,
   UserCheck,
-  FileText
+  FileText,
+  Trash2
 } from 'lucide-react';
 import { PROPERTIES, INITIAL_CLEANERS } from './constants.ts';
 import { Property, Cleaner, Mission, PropertyKey } from './types.ts';
@@ -226,7 +227,7 @@ const App: React.FC = () => {
     const missionIdKey = mission._id ? '_id' : 'id';
     const missionId = mission[missionIdKey];
 
-    const prevMission = missions.find(m => m[missionIdKey] === missionId);
+    const prevMission = missions.find(m => (m._id || m.id) === missionId);
 
     if (mission.cleanerId && mission.status === 'pending') {
       mission.status = 'assigned';
@@ -234,7 +235,7 @@ const App: React.FC = () => {
       mission.status = 'pending';
     }
 
-    setMissions(prev => prev.map(m => (m[missionIdKey] === missionId ? mission : m)));
+    setMissions(prev => prev.map(m => ((m._id || m.id) === missionId ? mission : m)));
     
     try {
       await fetch('/api/missions', {
@@ -263,10 +264,10 @@ const App: React.FC = () => {
   
   const handleCreateMission = async (missionData: Partial<Mission>) => {
     const newMission = {
-      id: `manual-${Date.now()}`,
+      isManual: true,
       status: 'pending',
       ...missionData,
-    };
+    } as Mission;
     
     try {
       const response = await fetch('/api/missions', {
@@ -284,6 +285,24 @@ const App: React.FC = () => {
       }
     } catch (e) {
       console.error("Error creating mission:", e);
+    }
+  };
+
+  const handleDeleteMission = async (mission: Mission) => {
+    const missionId = mission._id || mission.id;
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer la mission pour ${mission.propertyId} le ${mission.date} ?`)) return;
+
+    try {
+      const response = await fetch(`/api/missions?id=${missionId}`, { method: 'DELETE' });
+      if(response.ok) {
+        setMissions(prev => prev.filter(m => (m._id || m.id) !== missionId));
+      } else {
+        const data = await response.json();
+        alert(data.error || 'Impossible de supprimer la mission.')
+      }
+    } catch (e) {
+      console.error("Error deleting mission:", e);
+      alert('Une erreur est survenue.')
     }
   };
 
@@ -345,6 +364,7 @@ const App: React.FC = () => {
               isAdmin={isAdmin} 
               currentCleaner={isAdmin ? null : currentUser as Cleaner} 
               onUpdateMission={handleUpdateMission} 
+              onDeleteMission={handleDeleteMission}
               onCreateMission={() => setIsCreatingMission(true)}
               onEditNote={(m: Mission) => setEditingNoteMission(m)}
               onSync={handleManualSync}
@@ -365,7 +385,7 @@ const App: React.FC = () => {
           )}
           {activeTab === 'finance' && <FinanceView missions={missions} cleaners={cleaners} />}
           {activeTab === 'agent-finance' && <AgentFinanceView missions={missions} currentCleaner={currentUser as Cleaner} />}
-          {activeTab === 'emails' && <EmailsArchiveView />}
+          {activeTab === 'emails' && <EmailsArchiveView onDataRefresh={loadInitialData}/>}
         </div>
       </main>
 
@@ -490,7 +510,7 @@ const CleanerModal = ({ cleaner, onClose, onSave }: any) => {
                 placeholder="maria@exemple.com"
               />
             </div>
-            <div>
+            <div className="md:col-span-2">
               <label className="block text-[10px] font-black uppercase text-slate-400 mb-2">Mot de passe</label>
               <input 
                 type="password"
@@ -498,15 +518,6 @@ const CleanerModal = ({ cleaner, onClose, onSave }: any) => {
                 onChange={e => setFormData({...formData, password: e.target.value})}
                 className="w-full bg-slate-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-orange-400 outline-none font-bold"
                 placeholder="••••••••"
-              />
-            </div>
-            <div>
-              <label className="block text-[10px] font-black uppercase text-slate-400 mb-2">Téléphone</label>
-              <input 
-                value={formData.phone} 
-                onChange={e => setFormData({...formData, phone: e.target.value})}
-                className="w-full bg-slate-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-orange-400 outline-none font-bold"
-                placeholder="06..."
               />
             </div>
           </div>
@@ -833,7 +844,7 @@ const AgentCalendarView = ({ missions, currentCleaner }: { missions: Mission[], 
   );
 };
 
-const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpdateMission, onEditNote, onSync, isSyncing, onCreateMission }: any) => {
+const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpdateMission, onEditNote, onSync, isSyncing, onCreateMission, onDeleteMission }: any) => {
   const [activePicker, setActivePicker] = useState<string | null>(null);
 
   const filteredMissions = useMemo(() => {
@@ -891,7 +902,7 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
                   <div className="flex items-center gap-2">
                     <div className={`w-2.5 h-2.5 rounded-full ${PROPERTIES.find(p => p.id === m.propertyId)?.color}`} />
                     <span className="font-bold uppercase tracking-tight">{m.propertyId}</span>
-                    {!m.calendarEventId && <MousePointer2 size={12} className="text-orange-500" />}
+                    {m.isManual && <MousePointer2 size={12} className="text-orange-500" />}
                     {m.notes && (
                       <div className="group relative">
                         <StickyNote size={14} className="text-orange-500 cursor-help" />
@@ -958,6 +969,11 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
                 <td className="px-6 py-4"><StatusBadge status={m.status} cleanerId={m.cleanerId} /></td>
                 <td className="px-6 py-4 text-right">
                   <div className="flex justify-end items-center gap-1">
+                    {isAdmin && m.isManual && (
+                        <button onClick={() => onDeleteMission(m)} className="p-2 text-red-400 hover:text-red-600 transition-colors" title="Supprimer la mission">
+                            <Trash2 size={18} />
+                        </button>
+                    )}
                     {isAdmin && (
                       <button onClick={() => onEditNote(m)} className="p-2 text-slate-400 hover:text-[#1A2D42] transition-colors" title="Ajouter une note">
                         <MessageSquare size={18} />
@@ -1009,10 +1025,6 @@ const StaffGridView = ({ cleaners, onEdit }: any) => {
                 <span key={p} className="bg-slate-50 border text-slate-400 text-[9px] font-black px-2 py-1 rounded-lg uppercase">{p}</span>
               ))}
               {c.assignedProperties.length === 0 && <span className="text-[9px] text-slate-300 italic">Aucune propriété</span>}
-            </div>
-            <div className="flex items-center justify-between mt-4">
-              <p className="text-[10px] font-black uppercase text-slate-300 tracking-widest">Téléphone</p>
-              <span className="text-xs font-bold text-slate-900">{c.phone || "Non renseigné"}</span>
             </div>
           </div>
         </div>
@@ -1261,17 +1273,18 @@ const AgentFinanceView = ({ missions, currentCleaner }: { missions: Mission[], c
   );
 };
 
-const EmailsArchiveView: React.FC = () => {
+const EmailsArchiveView: React.FC<{onDataRefresh: () => void}> = ({ onDataRefresh }) => {
   const [emails, setEmails] = useState<any[]>([]);
   const [isTesting, setIsTesting] = useState(false);
-  const [testStatus, setTestStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const loadEmails = () => fetch('/api/emails').then(r => r.json()).then(setEmails);
   useEffect(() => { loadEmails(); }, []);
 
   const handleTestMailjet = async () => {
     setIsTesting(true);
-    setTestStatus(null);
+    setStatus(null);
     try {
       const response = await fetch('/api/notify', {
         method: 'POST',
@@ -1285,21 +1298,47 @@ const EmailsArchiveView: React.FC = () => {
       });
       const resData = await response.json();
       if (response.ok) {
-        setTestStatus({ type: 'success', message: 'Email envoyé !' });
+        setStatus({ type: 'success', message: 'Email de test envoyé avec succès !' });
         loadEmails();
       } else {
-        setTestStatus({ type: 'error', message: resData.error || 'Erreur API' });
+        setStatus({ type: 'error', message: resData.error || 'Erreur API lors de l\'envoi du test.' });
       }
     } catch (error) {
-      setTestStatus({ type: 'error', message: 'Vérifiez la configuration Mailjet dans Vercel' });
+      setStatus({ type: 'error', message: 'Impossible de joindre l\'API. Vérifiez la config.' });
     } finally { setIsTesting(false); }
+  };
+
+  const handleMigration = async () => {
+    if (!confirm("Êtes-vous sûr de vouloir nettoyer les notes de toutes les missions existantes ? Cette action est irréversible.")) return;
+    
+    setIsMigrating(true);
+    setStatus(null);
+    try {
+      const response = await fetch('/api/migrate-notes', { method: 'POST' });
+      const resData = await response.json();
+      if (response.ok) {
+        setStatus({ type: 'success', message: resData.message || 'Migration réussie !' });
+        onDataRefresh(); // Re-fetch all data
+      } else {
+        setStatus({ type: 'error', message: resData.error || 'Erreur durant la migration.' });
+      }
+    } catch (error) {
+      setStatus({ type: 'error', message: 'Impossible de joindre l\'API de migration.' });
+    } finally { setIsMigrating(false); }
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center"><h2 className="text-2xl font-black text-[#1A2D42]">Emails Archivés</h2><button onClick={handleTestMailjet} disabled={isTesting} className="bg-orange-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm">{isTesting ? <RefreshCw className="animate-spin" size={16} /> : <Send size={16} />} Tester Mailjet</button></div>
-      {testStatus && <div className={`p-4 rounded-2xl border font-bold text-sm ${testStatus.type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>{testStatus.message}</div>}
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-black text-[#1A2D42]">Zone Technique</h2>
+        <div className="flex items-center gap-3">
+          <button onClick={handleMigration} disabled={isMigrating} className="bg-red-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm">{isMigrating ? <RefreshCw className="animate-spin" size={16} /> : <Trash2 size={16} />} Purger les anciennes notes</button>
+          <button onClick={handleTestMailjet} disabled={isTesting} className="bg-orange-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm">{isTesting ? <RefreshCw className="animate-spin" size={16} /> : <Send size={16} />} Tester Mailjet</button>
+        </div>
+      </div>
+      {status && <div className={`p-4 rounded-2xl border font-bold text-sm ${status.type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>{status.message}</div>}
       <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+        <div className="px-6 py-5 border-b bg-slate-50/50"><h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">Emails Récemment Archivés</h3></div>
         <table className="w-full text-left"><thead className="bg-slate-50 text-[10px] uppercase font-black tracking-widest text-slate-400"><tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">À</th><th className="px-6 py-4">Sujet</th></tr></thead>
         <tbody className="divide-y">{emails.map((e:any) => <tr key={e._id} className="text-xs hover:bg-slate-50 transition-colors"><td className="px-6 py-4 whitespace-nowrap">{new Date(e.sentAt).toLocaleString()}</td><td className="px-6 py-4">{e.to}</td><td className="px-6 py-4 truncate max-w-xs">{e.subject}</td></tr>)}</tbody></table>
       </div>
