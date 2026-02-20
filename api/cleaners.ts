@@ -22,6 +22,9 @@ export default async function handler(req: any, res: any) {
 
   if (req.method === 'GET') {
     const cleaners = await collection.find({}).toArray();
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     return res.status(200).json(cleaners);
   }
 
