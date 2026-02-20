@@ -164,7 +164,7 @@ const App: FC = () => {
   const handleSaveCleaner = async (cleaner: Cleaner) => {
     try {
       const response = await fetch('/api/cleaners', {
-        method: cleaner._id ? 'PUT' : 'POST',
+        method: (cleaner._id || cleaner.id) ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cleaner)
       });
@@ -556,7 +556,7 @@ const DashboardView: FC<DashboardViewProps> = ({ missions, cleaners, onUpdateMis
               </div>
               <div className="flex items-center gap-3">
                 <StatusBadge status={m.status} cleanerId={m.cleanerId} />
-                <button onClick={() => onUpdateMission({...m, status: m.status === 'completed' ? 'assigned' : 'completed'})} className={`p-2 transition-colors ${m.status === 'completed' ? 'text-emerald-500' : 'text-slate-400 hover:text-emerald-500'}`}><CheckCircle size={20} /></button>
+                <button onClick={() => onUpdateMission({...m, status: m.status === 'completed' ? (m.cleanerId ? 'assigned' : 'pending') : 'completed'})} className={`p-2 transition-colors ${m.status === 'completed' ? 'text-emerald-500' : 'text-slate-400 hover:text-emerald-500'}`}><CheckCircle size={20} /></button>
               </div>
             </div>
           )) : <div className="px-6 py-10 text-center"><p className="text-sm font-bold text-slate-400">Aucune mission prioritaire à afficher.</p></div>}
