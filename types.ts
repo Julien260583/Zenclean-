@@ -11,6 +11,7 @@ export interface Property {
 }
 
 export interface Cleaner {
+  _id?: string; // ID from MongoDB
   id: string;
   name: string;
   email: string;
