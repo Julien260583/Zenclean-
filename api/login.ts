@@ -1,7 +1,7 @@
 
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { MongoClient } from 'mongodb';
-import { Cleaner } from '../types';
+import { Cleaner } from '../types.js';
 
 // Note: It's crucial to use environment variables for sensitive data.
 const {
