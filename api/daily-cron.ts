@@ -1,10 +1,9 @@
 
 import { MongoClient, AnyBulkWriteOperation } from 'mongodb';
+import { sendEmail } from './lib/email'; // Correction de l'import
 
 const uri = process.env.MONGODB_URI || "";
 const ADMIN_EMAIL = "mytoulhouse@gmail.com";
-const MAILJET_API_KEY = process.env.MAILJET_KEY_API;
-const MAILJET_SECRET_KEY = process.env.MAILJET_SECRET_API;
 
 const PROPERTIES_CONFIG = [
   { id: 'naturel', calendarId: '319da3c78547e5913af3b1fed606645b9ead9b92795482061bd440d47fc23d65@group.calendar.google.com' },
@@ -12,31 +11,6 @@ const PROPERTIES_CONFIG = [
   { id: 'scandinave', calendarId: '4f94cd0632de6ac44b4927d9783d73faba95e7ab54b506d60f587b46eaf54119@group.calendar.google.com' },
   { id: 'spa', calendarId: '7cd6b0882eec615ff72afba17915838e642c24c06ba1a96eee824da01b40cb0b@group.calendar.google.com' }
 ];
-
-async function sendEmail(to: string, subject: string, html: string): Promise<Response | undefined> {
-    if (!MAILJET_API_KEY || !MAILJET_SECRET_KEY) return;
-    const auth = btoa(`${MAILJET_API_KEY}:${MAILJET_SECRET_KEY}`);
-    try {
-        return await fetch('https://api.mailjet.com/v3.1/send', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Basic ${auth}`
-            },
-            body: JSON.stringify({
-                Messages: [{
-                    From: { Email: "mytoulhouse@gmail.com", Name: "My Toul'House" },
-                    To: [{ Email: to }],
-                    Subject: subject,
-                    HTMLPart: html
-                }]
-            })
-        });
-    } catch (e) {
-        console.error("Erreur envoi email:", e);
-    }
-}
-
 
 export default async function handler(req: any, res: any) {
     const client = new MongoClient(uri);
@@ -56,7 +30,7 @@ export default async function handler(req: any, res: any) {
         // --- 1. Nettoyage des anciennes missions ---
         const twoMonthsAgo = new Date();
         twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
-        const purgeResult = await missionsCol.deleteMany({
+        await missionsCol.deleteMany({
             status: 'completed',
             date: { $lt: twoMonthsAgo.toISOString().split('T')[0] }
         });
