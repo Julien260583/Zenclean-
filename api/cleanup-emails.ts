@@ -1,39 +1,31 @@
 
-import { MongoClient } from 'mongodb';
-
-const uri = process.env.MONGODB_URI || "";
-let clientPromise: Promise<MongoClient>;
-
-if (uri) {
-  let globalWithMongo = globalThis as typeof globalThis & { _mongoClientPromise?: Promise<MongoClient> };
-  if (!globalWithMongo._mongoClientPromise) {
-    const client = new MongoClient(uri);
-    globalWithMongo._mongoClientPromise = client.connect();
-  }
-  clientPromise = globalWithMongo._mongoClientPromise;
-}
+import clientPromise from '../../lib/mongodb';
 
 export default async function handler(req: any, res: any) {
-  if (!clientPromise) return res.status(500).json({ error: "DB non connectée" });
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', ['POST']);
+        return res.status(405).json({ message: `Méthode ${req.method} non autorisée` });
+    }
 
-  try {
-    const client = await clientPromise;
-    const db = client.db("zenclean");
-    
-    // Date limite : il y a 30 jours
-    const oneMonthAgo = new Date();
-    oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
+    try {
+        const client = await clientPromise;
+        const db = client.db("zenclean");
 
-    const result = await db.collection("emails").deleteMany({
-      sentAt: { $lt: oneMonthAgo }
-    });
+        // Date limite : e-mails envoyés il y a plus de 30 jours
+        const oneMonthAgo = new Date();
+        oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
 
-    return res.status(200).json({ 
-      success: true, 
-      deletedCount: result.deletedCount,
-      thresholdDate: oneMonthAgo 
-    });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
-  }
+        const result = await db.collection("emails").deleteMany({
+            sentAt: { $lt: oneMonthAgo }
+        });
+
+        return res.status(200).json({
+            success: true,
+            deletedCount: result.deletedCount,
+            thresholdDate: oneMonthAgo.toISOString()
+        });
+    } catch (error: any) {
+        console.error("API Error cleanup-emails:", error);
+        return res.status(500).json({ error: error.message || "Une erreur est survenue lors du nettoyage des e-mails." });
+    }
 }

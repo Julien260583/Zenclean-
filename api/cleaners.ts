@@ -1,57 +1,56 @@
 
-import { MongoClient } from 'mongodb';
-
-const uri = process.env.MONGODB_URI || "";
-let clientPromise: Promise<MongoClient>;
-
-if (!uri) {
-  throw new Error("Veuillez ajouter MONGODB_URI à vos variables d'environnement.");
-}
-
-let globalWithMongo = globalThis as typeof globalThis & { _mongoClientPromise?: Promise<MongoClient> };
-if (!globalWithMongo._mongoClientPromise) {
-  const client = new MongoClient(uri);
-  globalWithMongo._mongoClientPromise = client.connect();
-}
-clientPromise = globalWithMongo._mongoClientPromise;
+import clientPromise from '../../lib/mongodb';
+import { ObjectId } from 'mongodb';
 
 export default async function handler(req: any, res: any) {
-  const client = await clientPromise;
-  const db = client.db("zenclean");
-  const collection = db.collection("cleaners");
+    try {
+        const client = await clientPromise;
+        const db = client.db("zenclean");
+        const collection = db.collection("cleaners");
 
-  if (req.method === 'GET') {
-    const cleaners = await collection.find({}).toArray();
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    return res.status(200).json(cleaners);
-  }
+        switch (req.method) {
+            case 'GET':
+                const cleaners = await collection.find({}).toArray();
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                res.setHeader('Pragma', 'no-cache');
+                res.setHeader('Expires', '0');
+                res.status(200).json(cleaners);
+                break;
 
-  if (req.method === 'POST') {
-    const data = { ...req.body };
-    const cleanerId = data.id;
+            case 'POST':
+                const data = { ...req.body };
+                const cleanerId = data.id;
+                delete data._id; // Important pour éviter les erreurs d'immutabilité avec MongoDB
 
-    // Suppression stricte du champ _id pour éviter l'erreur d'immutabilité
-    delete data._id;
+                if (!cleanerId) {
+                    return res.status(400).json({ error: "L'identifiant de l'agent est requis." });
+                }
 
-    if (!cleanerId) {
-      return res.status(400).json({ error: "L'identifiant de l'agent est requis." });
+                const result = await collection.updateOne(
+                    { id: cleanerId },
+                    { $set: data },
+                    { upsert: true }
+                );
+                
+                res.status(201).json({ success: true, data: result });
+                break;
+
+            case 'DELETE':
+                const { id } = req.query;
+                if (!id) {
+                    return res.status(400).json({ error: "L'identifiant de l'agent est requis pour la suppression." });
+                }
+                await collection.deleteOne({ id });
+                res.status(200).json({ success: true, message: `Agent ${id} supprimé.` });
+                break;
+
+            default:
+                res.setHeader('Allow', ['GET', 'POST', 'DELETE']);
+                res.status(405).json({ message: `Méthode ${req.method} non autorisée` });
+                break;
+        }
+    } catch (error: any) {
+        console.error("API Error cleaners:", error);
+        res.status(500).json({ error: error.message || "Une erreur est survenue sur le serveur." });
     }
-
-    await collection.updateOne(
-      { id: cleanerId }, 
-      { $set: data }, 
-      { upsert: true }
-    );
-    return res.status(201).json({ success: true });
-  }
-
-  if (req.method === 'DELETE') {
-      const { id } = req.query;
-      await collection.deleteOne({ id });
-      return res.status(200).json({ success: true });
-  }
-
-  res.status(405).json({ message: "Méthode non autorisée" });
 }
