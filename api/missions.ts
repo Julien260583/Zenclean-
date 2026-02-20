@@ -44,7 +44,7 @@ export default async function handler(req: any, res: any) {
             case 'DELETE':
                 const { id: deleteId } = req.query;
                 if (!deleteId) {
-                    return res.status(400).json({ error: 'L'identifiant de la mission est manquant.' });
+                    return res.status(400).json({ error: "L'identifiant de la mission est manquant." });
                 }
 
                 const deleteQuery = ObjectId.isValid(deleteId as string) ? { _id: new ObjectId(deleteId as string) } : { id: deleteId };
@@ -55,7 +55,7 @@ export default async function handler(req: any, res: any) {
                 }
 
                 if (missionToDelete.calendarEventId) {
-                    return res.status(403).json({ error: 'Impossible de supprimer une mission synchronisée via l\'API. Veuillez la retirer du calendrier Google.' });
+                    return res.status(403).json({ error: "Impossible de supprimer une mission synchronisée via l'API. Veuillez la retirer du calendrier Google." });
                 }
 
                 const deleteResult = await missionsCol.deleteOne(deleteQuery);
