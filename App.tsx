@@ -203,21 +203,20 @@ const App: React.FC = () => {
   };
 
   const handleSaveCleaner = async (cleaner: Cleaner) => {
-    setCleaners(prev => {
-      const exists = prev.find(c => c.id === cleaner.id);
-      if (exists) {
-        return prev.map(c => c.id === cleaner.id ? cleaner : c);
-      }
-      return [...prev, cleaner];
-    });
-
     try {
-      await fetch('/api/cleaners', {
+      const response = await fetch('/api/cleaners', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cleaner)
       });
-      setEditingCleaner(null);
+
+      if (response.ok) {
+        setEditingCleaner(null);
+        await loadInitialData(); // Re-fetch data to ensure UI is in sync with the database
+      } else {
+        console.error('Failed to save cleaner on the server.');
+        // Here you could add logic to show an error to the user
+      }
     } catch (e) {
       console.error("Failed to save cleaner:", e);
     }
