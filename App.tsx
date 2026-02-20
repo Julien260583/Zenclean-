@@ -893,7 +893,7 @@ const MissionsTableView = ({ missions, cleaners, isAdmin, currentCleaner, onUpda
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col items-start gap-4 md:flex-row md:items-center md:justify-between">
         <h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">{isAdmin ? "Toutes les missions" : "Missions disponibles & assignées"}</h3>
         
         <div className="flex items-center gap-2">
