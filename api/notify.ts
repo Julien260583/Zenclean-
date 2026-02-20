@@ -1,9 +1,11 @@
+
 import { MongoClient } from 'mongodb';
+import clientPromise from '../../lib/mongodb';
 
 // Cette fonction utilise maintenant fetch pour appeler directement l'API Mailjet.
 const sendEmail = async (to: string, subject: string, html: string, dedupKey?: string) => {
-  const apiKey = process.env.MAILJET_API_KEY;
-  const apiSecret = process.env.MAILJET_SECRET_KEY;
+  const apiKey = process.env.MAILJET_KEY_API;
+  const apiSecret = process.env.MAILJET_SECRET_API;
 
   if (!apiKey || !apiSecret) {
     console.error("Erreur: Les identifiants Mailjet ne sont pas définis.");
@@ -45,8 +47,6 @@ const sendEmail = async (to: string, subject: string, html: string, dedupKey?: s
   return response.json();
 };
 
-const uri = process.env.MONGODB_URI || "";
-
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
@@ -59,10 +59,8 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ success: false, error: 'Champs requis manquants: to, subject, html' });
   }
 
-  const client = new MongoClient(uri);
-
   try {
-    await client.connect();
+    const client = await clientPromise;
     const db = client.db("zenclean");
     const emailLogs = db.collection("email_logs");
 
@@ -84,7 +82,5 @@ export default async function handler(req: any, res: any) {
   } catch (error: any) {
     console.error("Erreur dans le handler /api/notify:", error);
     return res.status(500).json({ success: false, error: error.message || 'Une erreur interne du serveur est survenue.' });
-  } finally {
-    await client.close();
   }
 }
