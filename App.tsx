@@ -589,14 +589,15 @@ interface CalendarEvent {
   summary: string;
   description?: string;
   startDate: string;
-  startTime?: string | null;   // HH:MM in Europe/Paris, null for all-day
+  startTime?: string | null;
   endDate: string;
-  endTime?: string | null;     // HH:MM in Europe/Paris, null for all-day
+  endTime?: string | null;
   isAllDay?: boolean;
   eventType: 'checkin' | 'checkout' | 'reservation' | 'blocked';
   source: 'ical';
 }
 
+// A rendered band: either a standalone reservation/mission, or a fused ical+mission
 interface BandEvent {
   id: string;
   label: string;
@@ -608,7 +609,159 @@ interface BandEvent {
   eventType?: string;
   propertyId: PropertyKey;
   rawData: CalendarEvent | Mission;
+  // If this ical band has a mission fused at its end:
+  fusedMission?: Mission;
+  fusedMissionDate?: string;
 }
+
+// ─── Timeline view for "all properties" ───────────────────────────────────────
+const TimelineView: FC<{
+  bands: BandEvent[];
+  month: number;
+  year: number;
+  onSelect: (b: BandEvent) => void;
+  selected: BandEvent | null;
+}> = ({ bands, month, year, onSelect, selected }) => {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const days = Array.from({ length: daysInMonth }, (_, i) => {
+    const d = i + 1;
+    return `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  });
+  const today = new Date().toISOString().split('T')[0];
+
+  // Group bands by property
+  const byProp = PROPERTIES.map(p => ({
+    prop: p,
+    bands: bands.filter(b => b.propertyId === p.id)
+  }));
+
+  const CELL_W = 36; // px per day
+  const ROW_H = 48;
+  const LABEL_W = 90;
+  const totalW = LABEL_W + daysInMonth * CELL_W;
+
+  // For each property row, stack bands into swim-lanes (no overlap)
+  const getSwimLanes = (propBands: BandEvent[]) => {
+    type Lane = { band: BandEvent; startIdx: number; endIdx: number }[];
+    const lanes: Lane[] = [];
+    for (const band of propBands) {
+      const si = days.indexOf(band.startDate);
+      const ei = days.indexOf(band.endDate);
+      if (si === -1 && ei === -1) continue;
+      const startIdx = si === -1 ? 0 : si;
+      const endIdx = ei === -1 ? daysInMonth - 1 : ei;
+      let lane = 0;
+      while (lanes[lane] && lanes[lane].some(s => s.startIdx <= endIdx && s.endIdx >= startIdx)) lane++;
+      if (!lanes[lane]) lanes[lane] = [];
+      lanes[lane].push({ band, startIdx, endIdx });
+    }
+    return lanes;
+  };
+
+  return (
+    <div className="overflow-x-auto rounded-2xl border bg-white shadow-sm">
+      <div style={{ minWidth: totalW, position: 'relative' }}>
+        {/* Header: day numbers */}
+        <div className="flex border-b sticky top-0 bg-white z-20" style={{ paddingLeft: LABEL_W }}>
+          {days.map((ds, i) => {
+            const d = i + 1;
+            const isToday = ds === today;
+            const dow = new Date(ds + 'T12:00:00').getDay();
+            const isWE = dow === 0 || dow === 6;
+            return (
+              <div key={ds} className={`flex-shrink-0 flex flex-col items-center justify-center py-2 border-r last:border-r-0 ${isToday ? 'bg-orange-50' : isWE ? 'bg-slate-50' : ''}`}
+                style={{ width: CELL_W }}>
+                <span className={`text-[9px] font-black leading-none ${isWE ? 'text-slate-400' : 'text-slate-300'}`}>
+                  {['D','L','M','M','J','V','S'][dow]}
+                </span>
+                <span className={`text-[11px] font-black leading-tight ${isToday ? 'text-orange-500' : isWE ? 'text-slate-500' : 'text-slate-400'}`}>
+                  {d}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Property rows */}
+        {byProp.map(({ prop, bands: propBands }) => {
+          const lanes = getSwimLanes(propBands);
+          const rowHeight = Math.max(ROW_H, lanes.length * 24 + 12);
+          return (
+            <div key={prop.id} className="flex border-b last:border-b-0" style={{ minHeight: rowHeight }}>
+              {/* Property label */}
+              <div className="flex-shrink-0 flex items-center px-3 border-r bg-slate-50/80 z-10"
+                style={{ width: LABEL_W, minHeight: rowHeight }}>
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: prop.hexColor }} />
+                  <span className="text-xs font-black text-slate-700 uppercase tracking-tight leading-tight">{prop.name}</span>
+                </div>
+              </div>
+
+              {/* Timeline cells */}
+              <div className="relative flex-1" style={{ minHeight: rowHeight }}>
+                {/* Day grid lines */}
+                <div className="absolute inset-0 flex pointer-events-none">
+                  {days.map((ds, i) => {
+                    const dow = new Date(ds + 'T12:00:00').getDay();
+                    const isWE = dow === 0 || dow === 6;
+                    const isToday = ds === today;
+                    return (
+                      <div key={i} className={`border-r last:border-r-0 h-full flex-shrink-0 ${isToday ? 'bg-orange-50/40' : isWE ? 'bg-slate-50/60' : ''}`}
+                        style={{ width: CELL_W }} />
+                    );
+                  })}
+                </div>
+
+                {/* Bands */}
+                {lanes.map((lane, li) =>
+                  lane.map(({ band, startIdx, endIdx }) => {
+                    const isSelected = selected?.id === band.id;
+                    const left = startIdx * CELL_W;
+                    const width = (endIdx - startIdx + 1) * CELL_W;
+                    const top = 6 + li * 24;
+                    const hasFused = !!band.fusedMission && band.fusedMissionDate;
+                    const fusedIdx = hasFused ? days.indexOf(band.fusedMissionDate!) : -1;
+
+                    return (
+                      <div key={band.id} className="absolute cursor-pointer group"
+                        style={{ left, top, width, height: 20, zIndex: 10 }}
+                        onClick={() => onSelect(band)}
+                        title={band.label}>
+
+                        {/* Main band */}
+                        <div className="absolute inset-0 rounded-full overflow-hidden flex items-center"
+                          style={{
+                            backgroundColor: band.color,
+                            boxShadow: isSelected ? `0 0 0 2px white, 0 0 0 3.5px ${band.color}` : '0 1px 3px rgba(0,0,0,0.15)',
+                          }}>
+                          {/* Fused mission zone at end */}
+                          {hasFused && fusedIdx >= startIdx && (
+                            <div className="absolute right-0 top-0 bottom-0 rounded-r-full"
+                              style={{
+                                width: CELL_W,
+                                background: 'linear-gradient(90deg, transparent, #7C3AED)',
+                              }} />
+                          )}
+                          <span className="px-2 text-[9px] font-bold truncate leading-none"
+                            style={{ color: band.textColor, textShadow: '0 1px 2px rgba(0,0,0,0.2)' }}>
+                            {band.label}
+                          </span>
+                          {hasFused && (
+                            <span className="absolute right-1 text-[9px] leading-none" style={{ color: '#fff' }}>🧹</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 // ─── Unified Calendar View ─────────────────────────────────────────────────────
 const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
@@ -654,37 +807,37 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
     finally { setIsSyncing(false); setTimeout(() => setSyncStatus(null), 4000); }
   };
 
-  // Build BandEvents from iCal + missions
+  // Build BandEvents — fuse each ical reservation with its mission if the
+  // mission date falls on the checkout day (end of the reservation band).
   const allBands = useMemo((): BandEvent[] => {
     const bands: BandEvent[] = [];
     const filteredEvents = activeProp === 'all' ? calendarEvents : calendarEvents.filter(e => e.propertyId === activeProp);
+    const filteredMissions = activeProp === 'all' ? missions : missions.filter(m => m.propertyId === activeProp);
+
+    // Track which missions have been fused so we don't duplicate them
+    const fusedMissionIds = new Set<string>();
 
     for (const e of filteredEvents) {
       const prop = PROPERTIES.find(p => p.id === e.propertyId);
       const propColor = prop?.hexColor || '#888';
       const typeColors: Record<string, { color: string; text: string }> = {
-        reservation: { color: propColor,   text: '#fff' },
-        checkin:     { color: '#059669',    text: '#fff' },
-        checkout:    { color: '#EA580C',    text: '#fff' },
-        blocked:     { color: '#94A3B8',    text: '#fff' },
+        reservation: { color: propColor, text: '#fff' },
+        checkin:     { color: '#059669', text: '#fff' },
+        checkout:    { color: '#EA580C', text: '#fff' },
+        blocked:     { color: '#94A3B8', text: '#fff' },
       };
       const style = typeColors[e.eventType] || typeColors.reservation;
-      const typeLabels: Record<string, string> = {
-        reservation: '📅', checkin: '🟢', checkout: '🔴', blocked: '🚫'
-      };
+      const typeLabels: Record<string, string> = { reservation: '📅', checkin: '🟢', checkout: '🔴', blocked: '🚫' };
       const prefix = typeLabels[e.eventType] || '📅';
 
       let startD = e.startDate;
       let endD = e.endDate || e.startDate;
-      // For all-day events, iCal DTEND is exclusive → subtract 1 day.
-      // For timed events the parser already handles this correctly.
       if (e.isAllDay && endD > startD) {
         const ed = new Date(endD + 'T12:00:00');
         ed.setDate(ed.getDate() - 1);
         endD = ed.toISOString().split('T')[0];
       }
 
-      // Build time hint for band label
       const timeHint = (() => {
         if (e.isAllDay) return '';
         if (e.eventType === 'checkin' && e.startTime) return ` · ${e.startTime}`;
@@ -692,6 +845,17 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
         if (e.startTime) return ` · ${e.startTime}`;
         return '';
       })();
+
+      // Try to find a mission on the checkout day (endD) for the same property
+      const fusedMission = filteredMissions.find(m =>
+        m.propertyId === e.propertyId &&
+        m.date === endD &&
+        !fusedMissionIds.has(m._id || m.id)
+      );
+
+      if (fusedMission) {
+        fusedMissionIds.add(fusedMission._id || fusedMission.id);
+      }
 
       bands.push({
         id: e.uid,
@@ -703,12 +867,14 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
         eventType: e.eventType,
         propertyId: e.propertyId,
         rawData: e,
+        fusedMission: fusedMission,
+        fusedMissionDate: fusedMission ? endD : undefined,
       });
     }
 
-    // Missions as 1-day purple bands
-    const filteredMissions = activeProp === 'all' ? missions : missions.filter(m => m.propertyId === activeProp);
+    // Add missions that were NOT fused (no matching ical event on that day)
     for (const m of filteredMissions) {
+      if (fusedMissionIds.has(m._id || m.id)) continue;
       const prop = PROPERTIES.find(p => p.id === m.propertyId);
       bands.push({
         id: m._id || m.id,
@@ -725,10 +891,10 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
     return bands;
   }, [calendarEvents, missions, activeProp]);
 
-  // Build week rows (each cell is a YYYY-MM-DD string or null for padding)
+  // Week grid (used for single-property view)
   const weeks = useMemo(() => {
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const firstWeekDay = (new Date(year, month, 1).getDay() + 6) % 7; // Mon=0
+    const firstWeekDay = (new Date(year, month, 1).getDay() + 6) % 7;
     const rows: (string | null)[][] = [];
     let row: (string | null)[] = Array(firstWeekDay).fill(null);
     for (let d = 1; d <= daysInMonth; d++) {
@@ -741,7 +907,6 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
     return rows;
   }, [month, year]);
 
-  // For each week, compute band segments clipped to that week
   const weeksWithBands = useMemo(() => {
     return weeks.map(row => {
       const realDays = row.filter(Boolean) as string[];
@@ -753,14 +918,9 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
       const segments: Seg[] = [];
 
       for (const band of allBands) {
-        // Skip bands entirely outside this row
         if (band.startDate > rowEnd || band.endDate < rowStart) continue;
-
-        // Clip band to this row's range
         const clippedStart = band.startDate < rowStart ? rowStart : band.startDate;
         const clippedEnd = band.endDate > rowEnd ? rowEnd : band.endDate;
-
-        // Find column indices in the row array
         const colStart = row.findIndex(d => d === clippedStart);
         const colEnd = row.findIndex(d => d === clippedEnd);
         if (colStart === -1 || colEnd === -1) continue;
@@ -814,7 +974,7 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
           ))}
         </div>
 
-        {/* ── Legend + Stats ── */}
+        {/* ── Legend ── */}
         <div className="flex flex-wrap gap-4 text-xs text-slate-500 bg-white rounded-2xl border px-4 py-3 items-center justify-between">
           <div className="flex flex-wrap gap-4">
             {PROPERTIES.map(p => (
@@ -826,50 +986,57 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
             <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-emerald-600" /> Arrivée</div>
             <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-orange-600" /> Départ</div>
             <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-slate-400" /> Indisponible</div>
-            <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-violet-600" /> Ménage</div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-5 h-3 rounded-sm inline-block" style={{ background: 'linear-gradient(90deg, #3B82F6 60%, #7C3AED)' }} />
+              Résa + 🧹 intégré
+            </div>
           </div>
           <div className="flex gap-3 text-[11px] font-bold">
-            <span className="px-2 py-1 bg-slate-100 rounded-lg text-slate-600">
-              📅 {calendarEvents.length} événements iCal
-            </span>
-            <span className="px-2 py-1 bg-violet-50 rounded-lg text-violet-600">
-              🧹 {(activeProp === 'all' ? missions : missions.filter(m => m.propertyId === activeProp)).length} missions
-            </span>
+            <span className="px-2 py-1 bg-slate-100 rounded-lg text-slate-600">📅 {calendarEvents.length} événements</span>
+            <span className="px-2 py-1 bg-violet-50 rounded-lg text-violet-600">🧹 {(activeProp === 'all' ? missions : missions.filter(m => m.propertyId === activeProp)).length} missions</span>
           </div>
         </div>
       </div>
 
-      {/* ── Calendar ── */}
-      <div className="bg-white rounded-[32px] border shadow-sm overflow-hidden">
-        <div className="p-5 border-b bg-slate-50/50 flex justify-between items-center">
-          <h3 className="text-lg font-black text-[#1A2D42] capitalize">
-            {new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(currentDate)}
-          </h3>
-          <div className="flex items-center bg-white p-1 rounded-2xl border shadow-sm">
-            <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl"><ChevronLeft size={20} /></button>
-            <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-[#1A2D42]">Aujourd'hui</button>
-            <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl"><ChevronRight size={20} /></button>
-          </div>
+      {/* ── Month navigation ── */}
+      <div className="flex justify-between items-center">
+        <h3 className="text-lg font-black text-[#1A2D42] capitalize">
+          {new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(currentDate)}
+        </h3>
+        <div className="flex items-center bg-white p-1 rounded-2xl border shadow-sm">
+          <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl"><ChevronLeft size={20} /></button>
+          <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-[#1A2D42]">Aujourd'hui</button>
+          <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl"><ChevronRight size={20} /></button>
         </div>
+      </div>
 
-        {isLoading ? (
-          <div className="h-[400px] flex items-center justify-center text-slate-400">
-            <RefreshCw size={28} className="animate-spin" />
-          </div>
-        ) : (
+      {/* ── Calendar / Timeline ── */}
+      {isLoading ? (
+        <div className="h-[300px] bg-white rounded-[32px] border flex items-center justify-center text-slate-400">
+          <RefreshCw size={28} className="animate-spin" />
+        </div>
+      ) : activeProp === 'all' ? (
+        /* ── TIMELINE VIEW for all properties ── */
+        <TimelineView
+          bands={allBands}
+          month={month}
+          year={year}
+          onSelect={b => setSelectedBand(selectedBand?.id === b.id ? null : b)}
+          selected={selectedBand}
+        />
+      ) : (
+        /* ── WEEK GRID VIEW for single property ── */
+        <div className="bg-white rounded-[32px] border shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
             <div style={{ minWidth: 700 }}>
-              {/* Day headers */}
               <div className="grid grid-cols-7 border-b text-[10px] font-black uppercase tracking-widest text-slate-400 text-center bg-slate-50/50">
                 {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => (
                   <div key={d} className="py-3 border-r last:border-r-0">{d}</div>
                 ))}
               </div>
 
-              {/* Week rows with band rendering */}
               {weeksWithBands.map((weekData, wi) => (
                 <div key={wi} className="relative border-b last:border-b-0" style={{ height: ROW_HEIGHT }}>
-                  {/* Day cell backgrounds (pointer-events-none) */}
                   <div className="absolute inset-0 grid grid-cols-7">
                     {weekData.row.map((ds, ci) => {
                       const isToday = ds === today;
@@ -886,7 +1053,6 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                     })}
                   </div>
 
-                  {/* Continuous band strips */}
                   {weekData.segments.map((seg: any, si: number) => {
                     const CELL_PCT = 100 / 7;
                     const BAND_H = 19;
@@ -897,10 +1063,10 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                     const width = seg.colSpan * CELL_PCT;
                     const top = TOP_OFFSET + seg.lane * (BAND_H + BAND_GAP);
                     const isSelected = selectedBand?.id === seg.band.id;
+                    const hasFused = !!seg.band.fusedMission && seg.isEnd;
 
                     return (
-                      <div
-                        key={si}
+                      <div key={si}
                         onClick={() => setSelectedBand(isSelected ? null : seg.band)}
                         title={`${seg.band.label} · ${seg.band.startDate} → ${seg.band.endDate}`}
                         className="absolute cursor-pointer transition-all hover:opacity-90 hover:shadow-md"
@@ -909,22 +1075,27 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                           width: `calc(${width}% - ${(seg.isStart ? INSET : 0) + (seg.isEnd ? INSET : 0)}px)`,
                           top,
                           height: BAND_H,
-                          backgroundColor: seg.band.color,
                           borderRadius: `${seg.isStart ? 5 : 0}px ${seg.isEnd ? 5 : 0}px ${seg.isEnd ? 5 : 0}px ${seg.isStart ? 5 : 0}px`,
                           outline: isSelected ? `2px solid ${seg.band.color}` : 'none',
                           outlineOffset: 2,
                           zIndex: 10,
                           overflow: 'hidden',
                           boxShadow: isSelected ? `0 2px 8px ${seg.band.color}66` : 'none',
-                        }}
-                      >
-                        {seg.isStart && (
-                          <div className="flex items-center h-full px-2 gap-1 overflow-hidden" style={{ color: seg.band.textColor }}>
+                          // Gradient to violet if mission fused at end
+                          background: hasFused
+                            ? `linear-gradient(90deg, ${seg.band.color} 70%, #7C3AED)`
+                            : seg.band.color,
+                        }}>
+                        <div className="flex items-center justify-between h-full px-2 overflow-hidden" style={{ color: seg.band.textColor }}>
+                          {seg.isStart && (
                             <span className="text-[10px] font-bold leading-none truncate whitespace-nowrap opacity-95">
                               {seg.band.label}
                             </span>
-                          </div>
-                        )}
+                          )}
+                          {hasFused && (
+                            <span className="text-[10px] leading-none flex-shrink-0 ml-1">🧹</span>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
@@ -932,8 +1103,8 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
               ))}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* ── Detail Panel ── */}
       {selectedBand && (
@@ -951,6 +1122,7 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
             </div>
             <button onClick={() => setSelectedBand(null)} className="p-2 hover:bg-slate-100 rounded-xl flex-shrink-0"><X size={18} /></button>
           </div>
+
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="bg-slate-50 rounded-2xl p-4">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Début</p>
@@ -965,6 +1137,7 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
               </p>
             </div>
           </div>
+
           {selectedBand.isMission && (() => {
             const m = selectedBand.rawData as Mission;
             const labels: Record<string, string> = { pending: '⏳ En attente', assigned: '✅ Assignée', completed: '✔ Terminée', cancelled: '❌ Annulée' };
@@ -976,10 +1149,11 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
               </div>
             );
           })()}
+
           {!selectedBand.isMission && (() => {
             const e = selectedBand.rawData as CalendarEvent;
             return (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {!e.isAllDay && (e.startTime || e.endTime) && (
                   <div className="flex gap-3">
                     {e.startTime && (
@@ -996,7 +1170,20 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                     )}
                   </div>
                 )}
-                {e.description && <p className="text-sm text-slate-500 italic mt-1">{e.description}</p>}
+                {selectedBand.fusedMission && (() => {
+                  const m = selectedBand.fusedMission!;
+                  const labels: Record<string, string> = { pending: '⏳ En attente', assigned: '✅ Assignée', completed: '✔ Terminée', cancelled: '❌ Annulée' };
+                  return (
+                    <div className="border border-violet-100 bg-violet-50/50 rounded-2xl px-4 py-3 flex items-center gap-3">
+                      <span className="text-xl">🧹</span>
+                      <div>
+                        <p className="text-xs font-black text-violet-600 uppercase tracking-widest">Mission ménage incluse</p>
+                        <p className="text-sm text-slate-600 font-medium">{labels[m.status]}{m.startTime ? ` · ${m.startTime}—${m.endTime}` : ''}</p>
+                      </div>
+                    </div>
+                  );
+                })()}
+                {e.description && <p className="text-sm text-slate-500 italic">{e.description}</p>}
               </div>
             );
           })()}

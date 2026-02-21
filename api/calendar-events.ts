@@ -55,80 +55,68 @@ function getTzid(block: string, propName: string): string | null {
  *   20250215T110000Z            → UTC datetime → convert to Europe/Paris
  *   TZID=Europe/Paris:20250215T120000 → zoned datetime
  */
+/**
+ * Parse an iCal datetime string → { date: 'YYYY-MM-DD', time: 'HH:MM', isAllDay }
+ * expressed in Europe/Paris local time.
+ *
+ * Formats handled:
+ *   20250215              → all-day (no conversion needed)
+ *   20250215T160000Z      → UTC timestamp → convert to Paris via Intl
+ *   20250215T160000       → "floating" local time (no Z, no TZID) → treat as Paris local
+ *   TZID=Europe/Paris     → already Paris local time, read directly
+ */
 function parseIcalDateTime(raw: string, tzid: string | null): { date: string; time: string | null; isAllDay: boolean } {
-  const allDayMatch = raw.match(/^(\d{8})$/);
-  if (allDayMatch) {
-    const d = allDayMatch[1];
+  // All-day: exactly 8 digits, no T
+  if (/^\d{8}$/.test(raw)) {
     return {
-      date: `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`,
+      date: `${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`,
       time: null,
       isAllDay: true
     };
   }
 
-  // Datetime: 20250215T120000Z or 20250215T120000
-  const dtMatch = raw.match(/^(\d{8})T(\d{2})(\d{2})(\d{2})(Z?)$/);
-  if (!dtMatch) {
-    // Fallback: just extract date digits
-    const fallback = raw.match(/(\d{8})/);
-    if (!fallback) return { date: '', time: null, isAllDay: true };
-    const d = fallback[1];
-    return { date: `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`, time: null, isAllDay: true };
+  // Datetime with optional Z: 20250215T160000 or 20250215T160000Z
+  const m = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/);
+  if (!m) {
+    // Fallback: just read the 8 date digits
+    const fb = raw.match(/(\d{8})/);
+    if (!fb) return { date: '', time: null, isAllDay: true };
+    const d = fb[1];
+    return { date: `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`, time: null, isAllDay: true };
   }
 
-  const [, datePart, hh, mm, , isUTC] = dtMatch;
-  const year = parseInt(datePart.substring(0, 4));
-  const month = parseInt(datePart.substring(4, 6)) - 1;
-  const day = parseInt(datePart.substring(6, 8));
-  const hour = parseInt(hh);
-  const minute = parseInt(mm);
+  const [, yr, mo, dy, hh, mm, , isUTC] = m;
 
-  let localDate: Date;
+  let utcMs: number;
   if (isUTC === 'Z') {
-    // UTC → convert to Europe/Paris using Intl
-    localDate = new Date(Date.UTC(year, month, day, hour, minute, 0));
+    // True UTC timestamp — convert directly
+    utcMs = Date.UTC(+yr, +mo - 1, +dy, +hh, +mm, 0);
   } else {
-    // Local time — treat as Europe/Paris (UTC+1 winter, UTC+2 summer)
-    // Simple heuristic: use the date as-is, convert using Paris offset
-    localDate = new Date(Date.UTC(year, month, day, hour, minute, 0));
-    // Determine Paris offset: last Sunday of March → +2, last Sunday of Oct → +1
-    const parisOffset = getParisDSTOffset(localDate);
-    localDate = new Date(localDate.getTime() - parisOffset * 60 * 60 * 1000);
+    // Floating local time (no Z) or explicit TZID=Europe/Paris.
+    // Either way the numbers ARE already the Paris wall-clock time.
+    // To get the correct UTC ms we need to find what UTC instant
+    // corresponds to that Paris local time — use the offset that
+    // Europe/Paris has on that particular date (handles DST automatically).
+    //
+    // Trick: format a UTC date at the same digits and ask Intl what
+    // Paris says — if it matches we have our UTC instant, otherwise adjust.
+    const guessUtc = Date.UTC(+yr, +mo - 1, +dy, +hh, +mm, 0);
+    const parisAtGuess = new Date(guessUtc).toLocaleString('sv-SE', { timeZone: 'Europe/Paris' });
+    // parisAtGuess looks like "YYYY-MM-DD HH:MM:SS"
+    const [, phh, pmm] = parisAtGuess.match(/(\d{2}):(\d{2}):\d{2}$/) || [];
+    const offsetMs = ((+hh - +(phh||hh)) * 60 + (+mm - +(pmm||mm))) * 60 * 1000;
+    utcMs = guessUtc + offsetMs;
   }
 
-  // Now express in Europe/Paris local time
-  const parisStr = localDate.toLocaleString('sv-SE', { timeZone: 'Europe/Paris' });
-  // sv-SE gives "YYYY-MM-DD HH:MM:SS"
-  const [dateParsed, timeParsed] = parisStr.split(' ');
-  const timeFormatted = timeParsed ? timeParsed.substring(0, 5) : null; // HH:MM
-
-  return { date: dateParsed, time: timeFormatted, isAllDay: false };
-}
-
-// Returns the UTC offset in hours for Europe/Paris at a given UTC date
-function getParisDSTOffset(utcDate: Date): number {
-  // Europe/Paris is UTC+1 (CET) or UTC+2 (CEST)
-  // DST starts last Sunday of March at 02:00, ends last Sunday of October at 03:00
-  const year = utcDate.getUTCFullYear();
-
-  // Last Sunday of March
-  const dstStart = lastSundayOf(year, 2); // month 2 = March (0-indexed)
-  dstStart.setUTCHours(1, 0, 0, 0); // 02:00 Paris = 01:00 UTC
-
-  // Last Sunday of October
-  const dstEnd = lastSundayOf(year, 9); // month 9 = October (0-indexed)
-  dstEnd.setUTCHours(1, 0, 0, 0); // 03:00 Paris CEST = 01:00 UTC
-
-  if (utcDate >= dstStart && utcDate < dstEnd) return 2; // CEST
-  return 1; // CET
-}
-
-function lastSundayOf(year: number, month: number): Date {
-  // Find last day of month
-  const lastDay = new Date(Date.UTC(year, month + 1, 0));
-  const dayOfWeek = lastDay.getUTCDay(); // 0=Sun
-  lastDay.setUTCDate(lastDay.getUTCDate() - dayOfWeek);
-  return lastDay;
+  // Convert to Paris local representation
+  const parisStr = new Date(utcMs).toLocaleString('sv-SE', { timeZone: 'Europe/Paris' });
+  // "YYYY-MM-DD HH:MM:SS"
+  const [datePart, timePart] = parisStr.split(' ');
+  return {
+    date: datePart,
+    time: timePart ? timePart.slice(0, 5) : null,   // "HH:MM"
+    isAllDay: false
+  };
 }
 
 function parseIcalEvents(icalData: string, propertyId: string) {
