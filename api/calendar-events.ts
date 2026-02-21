@@ -34,40 +34,58 @@ function parseIcalDate(raw: string): string | null {
   return `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`;
 }
 
+// Unfold iCal content lines (continuation lines start with space or tab)
+function unfoldIcal(data: string): string {
+  return data.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
+}
+
+// Extract a single iCal property value, handling unfolded content
+function getProp(block: string, propName: string): string | null {
+  // Match property with optional parameters: PROPNAME or PROPNAME;params
+  const regex = new RegExp(`^${propName}(?:;[^:]*)?:(.+)$`, 'm');
+  const match = block.match(regex);
+  return match ? match[1].trim() : null;
+}
+
 function parseIcalEvents(icalData: string, propertyId: string) {
   const events: any[] = [];
-  const blocks = icalData.split('BEGIN:VEVENT');
+  // Unfold continuation lines first
+  const unfolded = unfoldIcal(icalData);
+  const blocks = unfolded.split('BEGIN:VEVENT');
   blocks.shift();
 
   for (const block of blocks) {
     try {
-      const uidMatch = block.match(/^UID:(.+)$/m);
-      const summaryMatch = block.match(/^SUMMARY:(.+)$/m);
-      const dtStartMatch = block.match(/^DTSTART(?:;[^:]*)?:(.+)$/m);
-      const dtEndMatch = block.match(/^DTEND(?:;[^:]*)?:(.+)$/m);
-      const descMatch = block.match(/^DESCRIPTION:(.+)$/m);
+      const uid = getProp(block, 'UID');
+      const summary = getProp(block, 'SUMMARY') || 'Réservation';
+      const startRaw = getProp(block, 'DTSTART');
+      const endRaw = getProp(block, 'DTEND');
+      const description = getProp(block, 'DESCRIPTION') || '';
 
-      if (!uidMatch || !dtStartMatch) continue;
-
-      const uid = uidMatch[1].trim();
-      const summary = summaryMatch ? summaryMatch[1].trim() : 'Événement';
-      const startRaw = dtStartMatch[1].trim();
-      const endRaw = dtEndMatch ? dtEndMatch[1].trim() : startRaw;
-      const description = descMatch ? descMatch[1].trim() : '';
+      if (!uid || !startRaw) continue;
 
       const startDate = parseIcalDate(startRaw);
-      const endDate = parseIcalDate(endRaw);
+      const endDate = endRaw ? parseIcalDate(endRaw) : startDate;
 
       if (!startDate) continue;
 
-      // Determine event type from summary keywords
+      // Determine event type from summary and description keywords
       let eventType: 'checkin' | 'checkout' | 'reservation' | 'blocked' = 'reservation';
-      const summaryLower = summary.toLowerCase();
-      if (summaryLower.includes('check-out') || summaryLower.includes('checkout') || summaryLower.includes('départ')) {
+      const textLower = (summary + ' ' + description).toLowerCase();
+      if (
+        textLower.includes('check-out') || textLower.includes('checkout') ||
+        textLower.includes('départ') || textLower.includes('depart')
+      ) {
         eventType = 'checkout';
-      } else if (summaryLower.includes('check-in') || summaryLower.includes('checkin') || summaryLower.includes('arrivée')) {
+      } else if (
+        textLower.includes('check-in') || textLower.includes('checkin') ||
+        textLower.includes('arrivée') || textLower.includes('arrivee') || textLower.includes('arrival')
+      ) {
         eventType = 'checkin';
-      } else if (summaryLower.includes('blocked') || summaryLower.includes('indisponible') || summaryLower.includes('fermé')) {
+      } else if (
+        textLower.includes('blocked') || textLower.includes('indisponible') ||
+        textLower.includes('not available') || textLower.includes('fermé') || textLower.includes('unavailable')
+      ) {
         eventType = 'blocked';
       }
 
@@ -75,9 +93,9 @@ function parseIcalEvents(icalData: string, propertyId: string) {
         uid,
         propertyId,
         summary,
-        description,
+        description: description.substring(0, 500), // cap description length
         startDate,
-        endDate,
+        endDate: endDate || startDate,
         eventType,
         source: 'ical',
         updatedAt: new Date()
@@ -153,13 +171,23 @@ export default async function handler(req: any, res: any) {
         filter.propertyId = propertyId;
       }
 
-      // Filter by month/year if provided
+      // Fetch events that OVERLAP the requested month (not just those starting in it).
+      // An event overlaps the month if: startDate <= endOfMonth AND (endDate >= startOfMonth OR startDate >= startOfMonth)
       if (month && year) {
-        const m = parseInt(month);
-        const y = parseInt(year);
+        const m = parseInt(month as string);
+        const y = parseInt(year as string);
         const startOfMonth = `${y}-${String(m).padStart(2, '0')}-01`;
-        const endOfMonth = `${y}-${String(m).padStart(2, '0')}-31`;
-        filter.startDate = { $gte: startOfMonth, $lte: endOfMonth };
+        // Last day of month
+        const lastDay = new Date(y, m, 0).getDate();
+        const endOfMonth = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+        // Events that overlap: startDate <= endOfMonth AND endDate >= startOfMonth
+        // (events without endDate use startDate as endDate)
+        filter.startDate = { $lte: endOfMonth };
+        filter.$or = [
+          { endDate: { $gte: startOfMonth } },
+          { endDate: { $exists: false }, startDate: { $gte: startOfMonth } }
+        ];
       }
 
       const events = await calendarEventsCol

@@ -594,9 +594,18 @@ interface CalendarEvent {
   source: 'ical';
 }
 
-type UnifiedEvent = 
-  | { type: 'ical'; data: CalendarEvent }
-  | { type: 'mission'; data: Mission };
+interface BandEvent {
+  id: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+  color: string;
+  textColor: string;
+  isMission?: boolean;
+  eventType?: string;
+  propertyId: PropertyKey;
+  rawData: CalendarEvent | Mission;
+}
 
 // ─── Unified Calendar View ─────────────────────────────────────────────────────
 const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
@@ -606,33 +615,24 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [selectedBand, setSelectedBand] = useState<BandEvent | null>(null);
 
   const month = currentDate.getMonth();
   const year = currentDate.getFullYear();
 
-  useEffect(() => {
-    loadCalendarEvents();
-  }, [month, year, activeProp]);
+  useEffect(() => { loadCalendarEvents(); }, [month, year]);
 
   const loadCalendarEvents = async () => {
     setIsLoading(true);
     try {
-      const params = new URLSearchParams({
-        month: String(month + 1),
-        year: String(year),
-        ...(activeProp !== 'all' ? { propertyId: activeProp } : {})
-      });
+      const params = new URLSearchParams({ month: String(month + 1), year: String(year) });
       const res = await fetch(`/api/calendar-events?${params}`);
       if (res.ok) {
         const data = await res.json();
         setCalendarEvents(Array.isArray(data) ? data : []);
       }
-    } catch (e) {
-      console.error("Erreur chargement événements:", e);
-    } finally {
-      setIsLoading(false);
-    }
+    } catch (e) { console.error(e); }
+    finally { setIsLoading(false); }
   };
 
   const handleSync = async () => {
@@ -645,61 +645,129 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
         setSyncStatus({ type: 'success', msg: `${data.synced} événements synchronisés` });
         await loadCalendarEvents();
       } else {
-        setSyncStatus({ type: 'error', msg: data.error || 'Erreur de synchronisation' });
+        setSyncStatus({ type: 'error', msg: data.error || 'Erreur' });
       }
-    } catch (e) {
-      setSyncStatus({ type: 'error', msg: 'Erreur réseau' });
-    } finally {
-      setIsSyncing(false);
-      setTimeout(() => setSyncStatus(null), 4000);
-    }
+    } catch { setSyncStatus({ type: 'error', msg: 'Erreur réseau' }); }
+    finally { setIsSyncing(false); setTimeout(() => setSyncStatus(null), 4000); }
   };
 
-  const gridDays = useMemo(() => {
-    const days: (number | null)[] = [];
-    const startDay = (new Date(year, month, 1).getDay() + 6) % 7;
+  // Build BandEvents from iCal + missions
+  const allBands = useMemo((): BandEvent[] => {
+    const bands: BandEvent[] = [];
+    const filteredEvents = activeProp === 'all' ? calendarEvents : calendarEvents.filter(e => e.propertyId === activeProp);
+
+    for (const e of filteredEvents) {
+      const prop = PROPERTIES.find(p => p.id === e.propertyId);
+      const propColor = prop?.hexColor || '#888';
+      const typeColors: Record<string, { color: string; text: string }> = {
+        reservation: { color: propColor,   text: '#fff' },
+        checkin:     { color: '#059669',    text: '#fff' },
+        checkout:    { color: '#EA580C',    text: '#fff' },
+        blocked:     { color: '#94A3B8',    text: '#fff' },
+      };
+      const style = typeColors[e.eventType] || typeColors.reservation;
+      const typeLabels: Record<string, string> = {
+        reservation: '📅', checkin: '🟢', checkout: '🔴', blocked: '🚫'
+      };
+      const prefix = typeLabels[e.eventType] || '📅';
+
+      let startD = e.startDate;
+      let endD = e.endDate || e.startDate;
+      // iCal DTEND is exclusive — subtract 1 day for display
+      if (endD > startD) {
+        const ed = new Date(endD + 'T12:00:00');
+        ed.setDate(ed.getDate() - 1);
+        endD = ed.toISOString().split('T')[0];
+      }
+
+      bands.push({
+        id: e.uid,
+        label: `${prefix} ${e.summary}`,
+        startDate: startD,
+        endDate: endD,
+        color: style.color,
+        textColor: style.text,
+        eventType: e.eventType,
+        propertyId: e.propertyId,
+        rawData: e,
+      });
+    }
+
+    // Missions as 1-day purple bands
+    const filteredMissions = activeProp === 'all' ? missions : missions.filter(m => m.propertyId === activeProp);
+    for (const m of filteredMissions) {
+      const prop = PROPERTIES.find(p => p.id === m.propertyId);
+      bands.push({
+        id: m._id || m.id,
+        label: `🧹 Ménage · ${prop?.name || m.propertyId}`,
+        startDate: m.date,
+        endDate: m.date,
+        color: '#7C3AED',
+        textColor: '#fff',
+        isMission: true,
+        propertyId: m.propertyId,
+        rawData: m,
+      });
+    }
+    return bands;
+  }, [calendarEvents, missions, activeProp]);
+
+  // Build week rows (each cell is a YYYY-MM-DD string or null for padding)
+  const weeks = useMemo(() => {
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    for (let i = 0; i < startDay; i++) days.push(null);
-    for (let d = 1; d <= daysInMonth; d++) days.push(d);
-    return days;
+    const firstWeekDay = (new Date(year, month, 1).getDay() + 6) % 7; // Mon=0
+    const rows: (string | null)[][] = [];
+    let row: (string | null)[] = Array(firstWeekDay).fill(null);
+    for (let d = 1; d <= daysInMonth; d++) {
+      const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      row.push(ds);
+      if (row.length === 7) { rows.push(row); row = []; }
+    }
+    while (row.length < 7) row.push(null);
+    if (row.some(x => x !== null)) rows.push(row);
+    return rows;
   }, [month, year]);
 
-  const eventsForDay = (day: number): UnifiedEvent[] => {
-    const dayStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const result: UnifiedEvent[] = [];
+  // For each week, compute band segments clipped to that week
+  const weeksWithBands = useMemo(() => {
+    return weeks.map(row => {
+      const realDays = row.filter(Boolean) as string[];
+      if (realDays.length === 0) return { row, segments: [] as any[] };
+      const rowStart = realDays[0];
+      const rowEnd = realDays[realDays.length - 1];
 
-    // iCal events
-    calendarEvents
-      .filter(e => (activeProp === 'all' || e.propertyId === activeProp) && e.startDate === dayStr)
-      .forEach(e => result.push({ type: 'ical', data: e }));
+      type Seg = { band: BandEvent; colStart: number; colSpan: number; lane: number; isStart: boolean; isEnd: boolean };
+      const segments: Seg[] = [];
 
-    // Mission events
-    missions
-      .filter(m => m.date === dayStr && (activeProp === 'all' || m.propertyId === activeProp))
-      .forEach(m => result.push({ type: 'mission', data: m }));
+      for (const band of allBands) {
+        // Skip bands entirely outside this row
+        if (band.startDate > rowEnd || band.endDate < rowStart) continue;
 
-    return result;
-  };
+        // Clip band to this row's range
+        const clippedStart = band.startDate < rowStart ? rowStart : band.startDate;
+        const clippedEnd = band.endDate > rowEnd ? rowEnd : band.endDate;
 
-  const selectedDayEvents = useMemo(() => {
-    if (!selectedDay) return [];
-    const [y, mo, d] = selectedDay.split('-').map(Number);
-    return eventsForDay(d);
-  }, [selectedDay, calendarEvents, missions, activeProp]);
+        // Find column indices in the row array
+        const colStart = row.findIndex(d => d === clippedStart);
+        const colEnd = row.findIndex(d => d === clippedEnd);
+        if (colStart === -1 || colEnd === -1) continue;
+        const colSpan = colEnd - colStart + 1;
+        let lane = 0;
+        while (segments.some(s => s.lane === lane && s.colStart < colStart + colSpan && s.colStart + s.colSpan > colStart)) lane++;
+        segments.push({ band, colStart, colSpan, lane, isStart: clippedStart === band.startDate, isEnd: clippedEnd === band.endDate });
+      }
+      segments.sort((a, b) => a.lane - b.lane || a.colStart - b.colStart);
+      return { row, segments };
+    });
+  }, [weeks, allBands]);
 
-  const EVENT_TYPE_CONFIG = {
-    checkin: { label: 'Arrivée', bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700', dot: 'bg-emerald-500' },
-    checkout: { label: 'Départ', bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-700', dot: 'bg-orange-500' },
-    reservation: { label: 'Réservation', bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-700', dot: 'bg-blue-500' },
-    blocked: { label: 'Indisponible', bg: 'bg-slate-100', border: 'border-slate-200', text: 'text-slate-600', dot: 'bg-slate-400' },
-    mission: { label: 'Ménage', bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700', dot: 'bg-purple-500' },
-  };
-
-  const getPropertyColor = (id: PropertyKey) => PROPERTIES.find(p => p.id === id)?.hexColor || '#888';
+  const maxLanes = useMemo(() => Math.max(1, ...weeksWithBands.map(w => w.segments.reduce((m: number, s: any) => Math.max(m, s.lane + 1), 0))), [weeksWithBands]);
+  const ROW_HEIGHT = 30 + maxLanes * 22 + 4;
+  const today = new Date().toISOString().split('T')[0];
 
   return (
     <div className="space-y-6">
-      {/* Header Controls */}
+      {/* ── Header ── */}
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <h2 className="text-2xl font-black text-[#1A2D42] uppercase tracking-tight">Calendrier Unifié</h2>
@@ -709,66 +777,65 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                 {syncStatus.msg}
               </span>
             )}
-            <button
-              onClick={handleSync}
-              disabled={isSyncing}
-              className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-2xl font-bold text-sm shadow-lg shadow-orange-200 transition-all disabled:opacity-50"
-            >
-              {isSyncing ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            <button onClick={handleSync} disabled={isSyncing}
+              className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-2xl font-bold text-sm shadow-lg shadow-orange-200 transition-all disabled:opacity-50">
+              <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
               {isSyncing ? 'Synchronisation...' : 'Sync iCal → MongoDB'}
             </button>
           </div>
         </div>
 
-        {/* Property Filter Buttons */}
+        {/* ── Property Filter Buttons ── */}
         <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => setActiveProp('all')}
-            className={`px-5 py-2.5 rounded-2xl font-bold text-sm transition-all border-2 ${activeProp === 'all' ? 'bg-[#1A2D42] text-white border-[#1A2D42] shadow-lg' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
-          >
+          <button onClick={() => setActiveProp('all')}
+            className={`px-5 py-2.5 rounded-2xl font-bold text-sm transition-all border-2 ${activeProp === 'all' ? 'bg-[#1A2D42] text-white border-[#1A2D42] shadow-lg' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
             Tous les apparts
           </button>
           {PROPERTIES.map(p => (
-            <button
-              key={p.id}
-              onClick={() => setActiveProp(p.id)}
+            <button key={p.id} onClick={() => setActiveProp(p.id)}
               className={`px-5 py-2.5 rounded-2xl font-bold text-sm transition-all border-2 flex items-center gap-2 ${activeProp === p.id ? 'text-white shadow-lg' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
-              style={activeProp === p.id ? { backgroundColor: p.hexColor, borderColor: p.hexColor } : { borderColor: p.hexColor + '50' }}
-            >
+              style={activeProp === p.id ? { backgroundColor: p.hexColor, borderColor: p.hexColor } : { borderColor: p.hexColor + '55' }}>
               <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: p.hexColor }} />
               {p.name}
             </button>
           ))}
         </div>
 
-        {/* Legend */}
-        <div className="flex flex-wrap gap-3">
-          {Object.entries(EVENT_TYPE_CONFIG).map(([key, cfg]) => (
-            <div key={key} className="flex items-center gap-1.5 text-xs text-slate-500">
-              <span className={`w-2.5 h-2.5 rounded-full ${cfg.dot}`} />
-              {cfg.label}
-            </div>
-          ))}
+        {/* ── Legend + Stats ── */}
+        <div className="flex flex-wrap gap-4 text-xs text-slate-500 bg-white rounded-2xl border px-4 py-3 items-center justify-between">
+          <div className="flex flex-wrap gap-4">
+            {PROPERTIES.map(p => (
+              <div key={p.id} className="flex items-center gap-1.5">
+                <span className="w-5 h-3 rounded-sm inline-block" style={{ backgroundColor: p.hexColor }} />
+                {p.name}
+              </div>
+            ))}
+            <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-emerald-600" /> Arrivée</div>
+            <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-orange-600" /> Départ</div>
+            <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-slate-400" /> Indisponible</div>
+            <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-violet-600" /> Ménage</div>
+          </div>
+          <div className="flex gap-3 text-[11px] font-bold">
+            <span className="px-2 py-1 bg-slate-100 rounded-lg text-slate-600">
+              📅 {calendarEvents.length} événements iCal
+            </span>
+            <span className="px-2 py-1 bg-violet-50 rounded-lg text-violet-600">
+              🧹 {(activeProp === 'all' ? missions : missions.filter(m => m.propertyId === activeProp)).length} missions
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Calendar Grid */}
+      {/* ── Calendar ── */}
       <div className="bg-white rounded-[32px] border shadow-sm overflow-hidden">
-        {/* Month navigation */}
         <div className="p-5 border-b bg-slate-50/50 flex justify-between items-center">
           <h3 className="text-lg font-black text-[#1A2D42] capitalize">
             {new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(currentDate)}
           </h3>
           <div className="flex items-center bg-white p-1 rounded-2xl border shadow-sm">
-            <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl transition-colors">
-              <ChevronLeft size={20} />
-            </button>
-            <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-[#1A2D42] transition-colors">
-              Aujourd'hui
-            </button>
-            <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl transition-colors">
-              <ChevronRight size={20} />
-            </button>
+            <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl"><ChevronLeft size={20} /></button>
+            <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-[#1A2D42]">Aujourd'hui</button>
+            <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl"><ChevronRight size={20} /></button>
           </div>
         </div>
 
@@ -778,132 +845,128 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <div className="min-w-[700px]">
+            <div style={{ minWidth: 700 }}>
               {/* Day headers */}
-              <div className="grid grid-cols-7 border-b text-[10px] font-black uppercase tracking-widest text-slate-400 text-center">
+              <div className="grid grid-cols-7 border-b text-[10px] font-black uppercase tracking-widest text-slate-400 text-center bg-slate-50/50">
                 {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => (
-                  <div key={d} className="py-3">{d}</div>
+                  <div key={d} className="py-3 border-r last:border-r-0">{d}</div>
                 ))}
               </div>
-              {/* Days grid */}
-              <div className="grid grid-cols-7 auto-rows-[130px]">
-                {gridDays.map((day, idx) => {
-                  if (day === null) return <div key={`empty-${idx}`} className="bg-slate-50/30 border-r border-b" />;
-                  const isToday = day === new Date().getDate() && month === new Date().getMonth() && year === new Date().getFullYear();
-                  const dayStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const dayEvents = eventsForDay(day);
-                  const isSelected = selectedDay === dayStr;
 
-                  return (
-                    <div
-                      key={day}
-                      onClick={() => setSelectedDay(isSelected ? null : dayStr)}
-                      className={`p-2 border-r border-b cursor-pointer transition-colors ${isToday ? 'bg-orange-50/30' : ''} ${isSelected ? 'ring-2 ring-inset ring-orange-400 bg-orange-50/20' : 'hover:bg-slate-50/50'}`}
-                    >
-                      <span className={`text-xs font-black block mb-1 ${isToday ? 'bg-orange-500 text-white w-6 h-6 flex items-center justify-center rounded-lg shadow-md shadow-orange-200' : 'text-slate-400'}`}>
-                        {day}
-                      </span>
-                      <div className="space-y-1 overflow-y-auto max-h-[90px]">
-                        {dayEvents.slice(0, 3).map((ev, i) => {
-                          if (ev.type === 'mission') {
-                            const cfg = EVENT_TYPE_CONFIG.mission;
-                            const propColor = getPropertyColor(ev.data.propertyId);
-                            return (
-                              <div key={`m-${i}`} className={`px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase flex items-center gap-1 border ${cfg.bg} ${cfg.border} ${cfg.text}`}>
-                                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: propColor }} />
-                                <span className="truncate">🧹 {ev.data.propertyId}</span>
-                              </div>
-                            );
-                          } else {
-                            const cfg = EVENT_TYPE_CONFIG[ev.data.eventType];
-                            const propColor = getPropertyColor(ev.data.propertyId);
-                            const icons: Record<string, string> = { checkin: '🟢', checkout: '🔴', reservation: '📅', blocked: '🚫' };
-                            return (
-                              <div key={`e-${i}`} className={`px-1.5 py-0.5 rounded-md text-[9px] font-black flex items-center gap-1 border ${cfg.bg} ${cfg.border} ${cfg.text}`}>
-                                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: propColor }} />
-                                <span className="truncate">{icons[ev.data.eventType]} {ev.data.summary.substring(0, 12)}</span>
-                              </div>
-                            );
-                          }
-                        })}
-                        {dayEvents.length > 3 && (
-                          <div className="text-[9px] text-slate-400 font-bold pl-1">+{dayEvents.length - 3} autres</div>
+              {/* Week rows with band rendering */}
+              {weeksWithBands.map((weekData, wi) => (
+                <div key={wi} className="relative border-b last:border-b-0" style={{ height: ROW_HEIGHT }}>
+                  {/* Day cell backgrounds (pointer-events-none) */}
+                  <div className="absolute inset-0 grid grid-cols-7">
+                    {weekData.row.map((ds, ci) => {
+                      const isToday = ds === today;
+                      const isWE = ci >= 5;
+                      return (
+                        <div key={ci} className={`border-r last:border-r-0 pt-1.5 px-2 ${isToday ? 'bg-orange-50/60' : isWE ? 'bg-slate-50/70' : ''}`}>
+                          {ds && (
+                            <span className={`text-[11px] font-black leading-none select-none ${isToday ? 'text-orange-500' : 'text-slate-300'}`}>
+                              {parseInt(ds.split('-')[2])}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Continuous band strips */}
+                  {weekData.segments.map((seg: any, si: number) => {
+                    const CELL_PCT = 100 / 7;
+                    const BAND_H = 19;
+                    const BAND_GAP = 2;
+                    const TOP_OFFSET = 24;
+                    const INSET = 3;
+                    const left = seg.colStart * CELL_PCT;
+                    const width = seg.colSpan * CELL_PCT;
+                    const top = TOP_OFFSET + seg.lane * (BAND_H + BAND_GAP);
+                    const isSelected = selectedBand?.id === seg.band.id;
+
+                    return (
+                      <div
+                        key={si}
+                        onClick={() => setSelectedBand(isSelected ? null : seg.band)}
+                        title={`${seg.band.label} · ${seg.band.startDate} → ${seg.band.endDate}`}
+                        className="absolute cursor-pointer transition-all hover:opacity-90 hover:shadow-md"
+                        style={{
+                          left: `calc(${left}% + ${seg.isStart ? INSET : 0}px)`,
+                          width: `calc(${width}% - ${(seg.isStart ? INSET : 0) + (seg.isEnd ? INSET : 0)}px)`,
+                          top,
+                          height: BAND_H,
+                          backgroundColor: seg.band.color,
+                          borderRadius: `${seg.isStart ? 5 : 0}px ${seg.isEnd ? 5 : 0}px ${seg.isEnd ? 5 : 0}px ${seg.isStart ? 5 : 0}px`,
+                          outline: isSelected ? `2px solid ${seg.band.color}` : 'none',
+                          outlineOffset: 2,
+                          zIndex: 10,
+                          overflow: 'hidden',
+                          boxShadow: isSelected ? `0 2px 8px ${seg.band.color}66` : 'none',
+                        }}
+                      >
+                        {seg.isStart && (
+                          <div className="flex items-center h-full px-2 gap-1 overflow-hidden" style={{ color: seg.band.textColor }}>
+                            <span className="text-[10px] font-bold leading-none truncate whitespace-nowrap opacity-95">
+                              {seg.band.label}
+                            </span>
+                          </div>
                         )}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           </div>
         )}
       </div>
 
-      {/* Day Detail Panel */}
-      {selectedDay && (
+      {/* ── Detail Panel ── */}
+      {selectedBand && (
         <div className="bg-white rounded-[32px] border shadow-sm p-6">
-          <div className="flex justify-between items-center mb-5">
-            <h3 className="font-black text-[#1A2D42] text-lg capitalize">
-              {new Date(selectedDay + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-            </h3>
-            <button onClick={() => setSelectedDay(null)} className="p-2 hover:bg-slate-100 rounded-xl">
-              <X size={18} />
-            </button>
-          </div>
-          {selectedDayEvents.length === 0 ? (
-            <p className="text-slate-400 font-bold text-center py-6">Aucun événement ce jour</p>
-          ) : (
-            <div className="space-y-3">
-              {selectedDayEvents.map((ev, i) => {
-                const propColor = getPropertyColor(ev.type === 'mission' ? ev.data.propertyId : (ev.data as CalendarEvent).propertyId);
-                const propName = PROPERTIES.find(p => p.id === (ev.type === 'mission' ? ev.data.propertyId : (ev.data as CalendarEvent).propertyId))?.name;
-
-                if (ev.type === 'mission') {
-                  const m = ev.data;
-                  const cleaner = null; // would need cleaners passed in
-                  const statusLabels: Record<string, string> = {
-                    pending: '⏳ En attente', assigned: '✅ Assignée', completed: '✔ Terminée', cancelled: '❌ Annulée'
-                  };
-                  return (
-                    <div key={`dm-${i}`} className="flex items-start gap-4 p-4 rounded-2xl border border-purple-100 bg-purple-50/50">
-                      <div className="w-3 h-3 rounded-full mt-1 flex-shrink-0" style={{ backgroundColor: propColor }} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-black text-purple-700 uppercase text-sm">🧹 Mission de ménage</span>
-                          <span className="px-2 py-0.5 bg-purple-100 text-purple-600 text-xs rounded-lg font-bold">{propName}</span>
-                        </div>
-                        <p className="text-sm text-slate-600 mt-1">{statusLabels[m.status] || m.status}</p>
-                        {m.notes && <p className="text-xs text-slate-400 mt-1 italic">{m.notes}</p>}
-                        {(m.startTime || m.endTime) && (
-                          <p className="text-xs text-slate-500 mt-1">🕐 {m.startTime} — {m.endTime}</p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                } else {
-                  const e = ev.data as CalendarEvent;
-                  const cfg = EVENT_TYPE_CONFIG[e.eventType];
-                  const labels: Record<string, string> = { checkin: '🟢 Arrivée', checkout: '🔴 Départ', reservation: '📅 Réservation', blocked: '🚫 Indisponible' };
-                  return (
-                    <div key={`de-${i}`} className={`flex items-start gap-4 p-4 rounded-2xl border ${cfg.border} ${cfg.bg}`}>
-                      <div className="w-3 h-3 rounded-full mt-1 flex-shrink-0" style={{ backgroundColor: propColor }} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`font-black text-sm ${cfg.text}`}>{labels[e.eventType]}</span>
-                          <span className="px-2 py-0.5 bg-white/60 text-slate-600 text-xs rounded-lg font-bold border">{propName}</span>
-                        </div>
-                        <p className="text-sm text-slate-700 font-semibold mt-1">{e.summary}</p>
-                        {e.description && <p className="text-xs text-slate-400 mt-1 italic truncate">{e.description}</p>}
-                        {e.endDate && e.endDate !== e.startDate && (
-                          <p className="text-xs text-slate-500 mt-1">📅 jusqu'au {new Date(e.endDate + 'T12:00:00').toLocaleDateString('fr-FR')}</p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                }
-              })}
+          <div className="flex justify-between items-start mb-5">
+            <div className="flex items-center gap-4">
+              <div className="w-1.5 h-14 rounded-full flex-shrink-0" style={{ backgroundColor: selectedBand.color }} />
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest mb-1" style={{ color: selectedBand.color }}>
+                  {PROPERTIES.find(p => p.id === selectedBand.propertyId)?.name}
+                  {selectedBand.eventType && ` · ${selectedBand.eventType}`}
+                </p>
+                <h3 className="font-black text-[#1A2D42] text-lg">{selectedBand.label}</h3>
+              </div>
             </div>
-          )}
+            <button onClick={() => setSelectedBand(null)} className="p-2 hover:bg-slate-100 rounded-xl flex-shrink-0"><X size={18} /></button>
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="bg-slate-50 rounded-2xl p-4">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Début</p>
+              <p className="font-bold text-slate-700 capitalize text-sm">
+                {new Date(selectedBand.startDate + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
+              </p>
+            </div>
+            <div className="bg-slate-50 rounded-2xl p-4">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Fin</p>
+              <p className="font-bold text-slate-700 capitalize text-sm">
+                {new Date(selectedBand.endDate + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
+              </p>
+            </div>
+          </div>
+          {selectedBand.isMission && (() => {
+            const m = selectedBand.rawData as Mission;
+            const labels: Record<string, string> = { pending: '⏳ En attente', assigned: '✅ Assignée', completed: '✔ Terminée', cancelled: '❌ Annulée' };
+            return (
+              <div className="space-y-1 text-sm text-slate-600">
+                <p><span className="font-bold">Statut :</span> {labels[m.status]}</p>
+                {m.startTime && <p><span className="font-bold">Horaire :</span> {m.startTime} — {m.endTime}</p>}
+                {m.notes && <p className="italic text-slate-400">{m.notes}</p>}
+              </div>
+            );
+          })()}
+          {!selectedBand.isMission && (() => {
+            const e = selectedBand.rawData as CalendarEvent;
+            return e.description ? <p className="text-sm text-slate-500 italic">{e.description}</p> : null;
+          })()}
         </div>
       )}
     </div>
