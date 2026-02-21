@@ -362,7 +362,7 @@ const App: FC = () => {
               <button onClick={() => setEditingNoteMission(null)} className="text-slate-400 hover:text-slate-600"><X size={24}/></button>
             </div>
             <div className="p-8">
-              <textarea id="mission-note-input" className="w-full h-40 bg-slate-50 border border-slate-100 rounded-2xl p-4 focus:ring-2 focus:ring-orange-400 outline-none font-medium text-slate-700" placeholder="Ajouter des instructions particulières ici..." defaultValue={editingNoteMission.notes || ""} />
+              <textarea id="mission-note-input" className="w-full h-40 bg-slate-50 border border-slate-100 rounded-2xl p-4 focus:ring-2 focus:ring-orange-400 outline-none font-medium text-slate-700" placeholder="Ajouter des instructions particulières ici..." defaultValue={editingNoteMission.notes || ""}></textarea>
               <div className="flex justify-end gap-3 mt-6">
                 <button onClick={() => setEditingNoteMission(null)} className="px-6 py-3 rounded-xl font-bold text-slate-400 hover:bg-slate-50">Annuler</button>
                 <button onClick={() => { const note = (document.getElementById('mission-note-input') as HTMLTextAreaElement).value; handleUpdateMission({...editingNoteMission, notes: note}); setEditingNoteMission(null); }} className="bg-[#1A2D42] text-white px-8 py-3 rounded-xl font-bold hover:shadow-lg transition-all">
@@ -635,41 +635,45 @@ const AgentCalendarView: FC<{ missions: Mission[]; currentCleaner: Cleaner }> = 
   for (let d = 1; d <= daysInMonth; d++) gridDays.push(d);
 
   return (
-    <div className="bg-white rounded-[40px] border shadow-xl shadow-slate-200/50 overflow-hidden">
-      <div className="p-8 border-b bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-4">
-        <h2 className="text-2xl font-black text-[#1A2D42] uppercase tracking-tight capitalize">{new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(currentDate)}</h2>
+    <div className="bg-white rounded-[40px] border shadow-xl shadow-slate-200/50">
+      <div className="p-6 md:p-8 border-b bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-4">
+        <h2 className="text-xl md:text-2xl font-black text-[#1A2D42] uppercase tracking-tight capitalize">{new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(currentDate)}</h2>
         <div className="flex items-center bg-white p-1 rounded-2xl border shadow-sm">
           <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl transition-colors"><ChevronLeft size={20} /></button>
           <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-[#1A2D42] transition-colors">Aujourd'hui</button>
           <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl transition-colors"><ChevronRight size={20} /></button>
         </div>
       </div>
-      <div className="grid grid-cols-7 border-b text-[10px] font-black uppercase tracking-widest text-slate-400 text-center py-4">
-        {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => <div key={d}>{d}</div>)}
-      </div>
-      <div className="grid grid-cols-7 auto-rows-[120px]">
-        {gridDays.map((day, idx) => {
-          if (day === null) return <div key={`empty-${idx}`} className="bg-slate-50/30 border-r border-b" />;
-          const isToday = day === new Date().getDate() && month === new Date().getMonth() && year === new Date().getFullYear();
-          return (
-            <div key={day} className={`p-2 border-r border-b relative group hover:bg-slate-50/50 transition-colors ${isToday ? 'bg-orange-50/20' : ''}`}>
-              <span className={`text-xs font-black ${isToday ? 'bg-orange-500 text-white w-6 h-6 flex items-center justify-center rounded-lg shadow-md shadow-orange-200' : 'text-slate-400'}`}>{day}</span>
-              <div className="mt-2 space-y-1">
-                {missionsForDay(day).map(m => {
-                  const prop = PROPERTIES.find(p => p.id === m.propertyId);
-                  const isMine = m.cleanerId === currentCleaner.id;
-                  return (
-                    <div key={m._id || m.id} className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase truncate flex items-center gap-1.5 border ${isMine ? 'bg-white border-slate-200 text-slate-800 shadow-sm' : 'bg-orange-50 border-orange-100 text-orange-600'}`} title={`${m.propertyId} - ${m.status}`}>
-                      <div className={`w-1.5 h-1.5 rounded-full ${prop?.color}`} />
-                      <span className="truncate">{m.propertyId}</span>
-                      {!isMine && <Zap size={8} className="text-orange-500 fill-orange-500" />}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
+      <div className="overflow-x-auto">
+        <div className="min-w-[980px]">
+          <div className="grid grid-cols-7 border-b text-[10px] font-black uppercase tracking-widest text-slate-400 text-center">
+            {['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'].map(d => <div key={d} className="py-4">{d}</div>)}
+          </div>
+          <div className="grid grid-cols-7 auto-rows-[160px]">
+            {gridDays.map((day, idx) => {
+              if (day === null) return <div key={`empty-${idx}`} className="bg-slate-50/30 border-r border-b" />;
+              const isToday = day === new Date().getDate() && month === new Date().getMonth() && year === new Date().getFullYear();
+              return (
+                <div key={day} className={`p-2 border-r border-b relative group hover:bg-slate-50/50 transition-colors ${isToday ? 'bg-orange-50/20' : ''}`}>
+                  <span className={`text-xs font-black ${isToday ? 'bg-orange-500 text-white w-6 h-6 flex items-center justify-center rounded-lg shadow-md shadow-orange-200' : 'text-slate-400'}`}>{day}</span>
+                  <div className="mt-2 space-y-2 overflow-y-auto max-h-[120px]">
+                    {missionsForDay(day).map(m => {
+                      const prop = PROPERTIES.find(p => p.id === m.propertyId);
+                      const isMine = m.cleanerId === currentCleaner.id;
+                      return (
+                        <div key={m._id || m.id} className={`p-2 rounded-lg text-xs font-black uppercase flex items-center gap-2 border ${isMine ? 'bg-white border-slate-200 text-slate-800 shadow-sm' : 'bg-orange-50 border-orange-100 text-orange-600'}`} title={`${m.propertyId} - ${m.status}`}>
+                          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${prop?.color}`} />
+                          <span className="truncate">{m.propertyId}</span>
+                          {!isMine && <Zap size={12} className="text-orange-500 fill-orange-500 flex-shrink-0" />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1004,7 +1008,7 @@ const EmailsArchiveView: FC<{onDataRefresh: () => void, onSync: () => void, isSy
 
   const handleSyncAndRefresh = async () => { await onSync(); loadEmails(); };
   const handlePurge = () => handleAction(() => fetch('/api/cleanup-emails', { method: 'POST' }), 'Purge réussie', 'Erreur de purge');
-  const handleTestEmail = () => handleAction(() => fetch('/api/test-email', { method: 'POST' }), 'Email envoyé', 'Erreur d\'envoi');
+  const handleTestEmail = () => handleAction(() => fetch('/api/emails?action=test', { method: 'POST' }), 'Email envoyé', 'Erreur d\'envoi');
   
   const isActionRunning = isSyncing || isPurging || isTestingMail;
 
@@ -1022,7 +1026,7 @@ const EmailsArchiveView: FC<{onDataRefresh: () => void, onSync: () => void, isSy
       <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
         <div className="px-6 py-5 border-b bg-slate-50/50"><h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">Emails Récemment Archivés</h3></div>
         <table className="w-full text-left"><thead className="bg-slate-50 text-[10px] uppercase font-black tracking-widest text-slate-400"><tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">À</th><th className="px-6 py-4">Sujet</th></tr></thead>
-        <tbody className="divide-y">{emails.map(e => <tr key={e._id} className="text-xs hover:bg-slate-50"><td className="px-6 py-4 whitespace-nowrap">{new Date(e.sentAt).toLocaleString()}</td><td className="px-6 py-4">{e.to}</td><td className="px-6 py-4 truncate max-w-xs">{e.subject}</td></tr>)}</tbody></table>
+        <tbody className="divide-y">{(emails || []).map(e => <tr key={e._id} className="text-xs hover:bg-slate-50"><td className="px-6 py-4 whitespace-nowrap">{new Date(e.sentAt).toLocaleString()}</td><td className="px-6 py-4">{e.to}</td><td className="px-6 py-4 truncate max-w-xs">{e.subject}</td></tr>)}</tbody></table>
       </div>
     </div>
   );

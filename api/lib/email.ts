@@ -28,7 +28,7 @@ export async function sendEmail(to: string, subject: string, html: string): Prom
             },
             body: JSON.stringify({
                 Messages: [{
-                    From: { Email: "mytoulhouse@gmail.com", Name: "ZenClean App" },
+                    From: { Email: "menage@mytoulhouse.fr", Name: "ZenClean App" },
                     To: [{ Email: to }],
                     Subject: subject,
                     HTMLPart: html
