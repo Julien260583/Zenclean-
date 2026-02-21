@@ -1,9 +1,15 @@
-
 {
   "crons": [
     {
       "path": "/api/daily-cron?schedule=true",
       "schedule": "0 6 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "api/daily-cron.ts":    { "maxDuration": 60 },
+    "api/calendar-events.ts": { "maxDuration": 30 },
+    "api/missions.ts":      { "maxDuration": 15 },
+    "api/cleaners.ts":      { "maxDuration": 15 },
+    "api/emails.ts":        { "maxDuration": 15 }
+  }
 }

@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useRef, FC } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, FC } from 'react';
 import { 
   LayoutDashboard, Calendar as CalendarIcon, Users, ClipboardCheck, Plus, Clock, Menu, X, LogOut, Lock, Mail, Edit2, RefreshCw, CheckCircle2, AlertCircle, ChevronLeft, ChevronRight, Calendar, StickyNote, Zap, MousePointer2, BarChart3, Eye, Trash, BellRing, CheckCircle, Send, Euro, MapPin, Phone, MessageSquare, UserPlus, Save, Waves, Download, Camera, UserCheck, FileText, Trash2, MailQuestion, LucideIcon
 } from 'lucide-react';
@@ -10,7 +10,7 @@ const ADMIN_EMAIL = "mytoulhouse@gmail.com";
 const ADMIN_PASSWORD = "bWInnRDFbs2R7XnfEv3g";
 const LAUNDRY_COST_PER_MISSION = 14;
 
-type AppTab = 'dashboard' | 'calendar' | 'unified-calendar' | 'missions' | 'staff' | 'finance' | 'agent-calendar' | 'emails' | 'agent-finance';
+type AppTab = 'dashboard' | 'unified-calendar' | 'missions' | 'staff' | 'finance' | 'agent-calendar' | 'emails' | 'agent-finance';
 
 const LogoComponent: FC<{ size?: 'sm' | 'lg' }> = ({ size = 'lg' }) => {
   const isLarge = size === 'lg';
@@ -133,7 +133,7 @@ const App: FC = () => {
     if (currentUser) loadInitialData();
   }, [currentUser]);
 
-  const loadInitialData = async () => {
+  const loadInitialData = useCallback(async () => {
     setIsLoading(true);
     try {
       const [cleanersRes, missionsRes] = await Promise.all([
@@ -147,9 +147,9 @@ const App: FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const handleManualSync = async () => {
+  const handleManualSync = useCallback(async () => {
     setIsSyncing(true);
     try {
       await fetch('/api/daily-cron?schedule=true');
@@ -159,7 +159,7 @@ const App: FC = () => {
     } finally {
       setIsSyncing(false);
     }
-  };
+  }, [loadInitialData]);
 
   const handleSaveCleaner = async (cleaner: Cleaner, isNew: boolean) => {
     try {
@@ -277,7 +277,6 @@ const App: FC = () => {
           </div>
           <nav className="space-y-2 flex-1 overflow-y-auto">
             {isAdmin && <SidebarItem id="dashboard" icon={LayoutDashboard} label="Tableau de bord" activeTab={activeTab} setActiveTab={setActiveTab} />}
-            {isAdmin && <SidebarItem id="calendar" icon={CalendarIcon} label="Calendriers" activeTab={activeTab} setActiveTab={setActiveTab} />}
             {isAdmin && <SidebarItem id="unified-calendar" icon={Calendar} label="Calendrier Unifié" activeTab={activeTab} setActiveTab={setActiveTab} />}
             {isAgent && <SidebarItem id="agent-calendar" icon={CalendarIcon} label="Mon Calendrier" activeTab={activeTab} setActiveTab={setActiveTab} />}
             <SidebarItem id="missions" icon={ClipboardCheck} label="Missions" activeTab={activeTab} setActiveTab={setActiveTab} />
@@ -320,7 +319,6 @@ const App: FC = () => {
         <div className="p-2 sm:p-6 flex-1 overflow-y-auto">
           <div className="max-w-7xl mx-auto">
             {activeTab === 'dashboard' && <DashboardView missions={missions} cleaners={cleaners} onUpdateMission={handleUpdateMission} />}
-            {activeTab === 'calendar' && <CalendarsTabView onSync={handleManualSync} isSyncing={isSyncing} />}
             {activeTab === 'unified-calendar' && <UnifiedCalendarView missions={missions} />}
             {activeTab === 'agent-calendar' && isAgent && <AgentCalendarView missions={missions} currentCleaner={currentUser} onUpdateMission={handleUpdateMission} />}
             {activeTab === 'missions' && (
@@ -983,13 +981,7 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                 {p.name}
               </div>
             ))}
-            <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-emerald-600" /> Arrivée</div>
-            <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-orange-600" /> Départ</div>
-            <div className="flex items-center gap-1.5"><span className="w-5 h-3 rounded-sm inline-block bg-slate-400" /> Indisponible</div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-5 h-3 rounded-sm inline-block" style={{ background: 'linear-gradient(90deg, #3B82F6 60%, #7C3AED)' }} />
-              Résa + 🧹 intégré
-            </div>
+
           </div>
           <div className="flex gap-3 text-[11px] font-bold">
             <span className="px-2 py-1 bg-slate-100 rounded-lg text-slate-600">📅 {calendarEvents.length} événements</span>
@@ -1189,46 +1181,6 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
           })()}
         </div>
       )}
-    </div>
-  );
-};
-
-const CalendarsTabView: FC<{ onSync: () => void; isSyncing: boolean }> = ({ onSync, isSyncing }) => {
-  const [activeProp, setActiveProp] = useState<PropertyKey | 'all'>('all');
-
-  const getCalendarUrl = () => {
-    const baseParams = "&ctz=Europe%2FParis&showTitle=0&showNav=1&showDate=1&showPrint=0&showTabs=0&showCalendars=0&showTz=0&mode=AGENDA";
-    if (activeProp === 'all') {
-      const srcParams = PROPERTIES.map(p => `src=${encodeURIComponent(p.calendarId)}&color=${encodeURIComponent(p.hexColor)}`).join('&');
-      return `https://calendar.google.com/calendar/embed?${srcParams}${baseParams}`;
-    }
-    const prop = PROPERTIES.find(p => p.id === activeProp);
-    if (!prop) return "";
-    return `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(prop.calendarId)}&color=${encodeURIComponent(prop.hexColor)}${baseParams}`;
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div className="flex flex-wrap gap-2">
-          <button onClick={() => setActiveProp('all')} className={`px-5 py-2.5 rounded-2xl font-bold text-sm transition-all ${activeProp === 'all' ? 'bg-[#1A2D42] text-white shadow-lg' : 'bg-white border text-slate-500 hover:bg-slate-50'}`}>
-            Vue d'ensemble
-          </button>
-          {PROPERTIES.map(p => (
-            <button key={p.id} onClick={() => setActiveProp(p.id)} className={`px-5 py-2.5 rounded-2xl font-bold text-sm transition-all ${activeProp === p.id ? 'bg-[#1A2D42] text-white shadow-lg' : 'bg-white border text-slate-500 hover:bg-slate-50'}`}>
-              {p.name}
-            </button>
-          ))}
-        </div>
-        <button onClick={onSync} disabled={isSyncing} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-2xl font-bold text-sm shadow-lg shadow-orange-200 transition-all disabled:opacity-50">
-          {isSyncing ? <RefreshCw size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-          {isSyncing ? "Synchronisation..." : "Synchroniser maintenant"}
-        </button>
-      </div>
-      <div className="bg-white rounded-[32px] border shadow-sm overflow-hidden h-[750px] relative">
-        <iframe src={getCalendarUrl()} className="w-full h-full border-none" key={activeProp} style={{ marginBottom: '-30px' }} />
-        <div className="absolute bottom-0 left-0 right-0 h-10 bg-white pointer-events-none" />
-      </div>
     </div>
   );
 };
