@@ -583,7 +583,7 @@ const CalendarsTabView: FC<{ onSync: () => void; isSyncing: boolean }> = ({ onSy
   const [activeProp, setActiveProp] = useState<PropertyKey | 'all'>('all');
 
   const getCalendarUrl = () => {
-    const baseParams = "&ctz=Europe%2FParis&showTitle=0&showNav=1&showDate=1&showPrint=0&showTabs=0&showCalendars=0&showTz=0";
+    const baseParams = "&ctz=Europe%2FParis&showTitle=0&showNav=1&showDate=1&showPrint=0&showTabs=0&showCalendars=0&showTz=0&mode=AGENDA";
     if (activeProp === 'all') {
       const srcParams = PROPERTIES.map(p => `src=${encodeURIComponent(p.calendarId)}&color=${encodeURIComponent(p.hexColor)}`).join('&');
       return `https://calendar.google.com/calendar/embed?${srcParams}${baseParams}`;
