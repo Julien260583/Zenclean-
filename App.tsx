@@ -164,7 +164,7 @@ const App: FC = () => {
   const handleSaveCleaner = async (cleaner: Cleaner) => {
     try {
       const response = await fetch('/api/cleaners', {
-        method: (cleaner._id || cleaner.id) ? 'PUT' : 'POST',
+        method: cleaner._id ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cleaner)
       });
@@ -1120,13 +1120,17 @@ const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSyn
       <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
         <div className="px-6 py-5 border-b bg-slate-50/50"><h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">Emails Récemment Archivés</h3></div>
         {loading ? <div className="p-12 text-center text-slate-400">Chargement...</div> : (
-        <table className="w-full text-left"><thead className="bg-slate-50 text-[10px] uppercase font-black tracking-widest text-slate-400"><tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">Destinataire</th><th className="px-6 py-4">Mission</th><th className="px-6 py-4">Sujet</th></tr></thead>
-        <tbody className="divide-y">{emails.map(e => <tr key={e._id} className="text-xs hover:bg-slate-50">
-            <td className="px-6 py-4 whitespace-nowrap text-slate-500">{new Date(e.sentAt).toLocaleString('fr-FR')}</td>
-            <td className="px-6 py-4 font-medium">{e.to}</td>
-            <td className="px-6 py-4 uppercase font-bold text-slate-400">{e.propertyId}</td>
-            <td className="px-6 py-4 truncate max-w-xs text-slate-600">{e.subject}</td>
-        </tr>)}</tbody></table>
+          emails && emails.length > 0 ? (
+            <table className="w-full text-left"><thead className="bg-slate-50 text-[10px] uppercase font-black tracking-widest text-slate-400"><tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">Destinataire</th><th className="px-6 py-4">Mission</th><th className="px-6 py-4">Sujet</th></tr></thead>
+            <tbody className="divide-y">{emails.map(e => <tr key={e._id} className="text-xs hover:bg-slate-50">
+                <td className="px-6 py-4 whitespace-nowrap text-slate-500">{new Date(e.sentAt).toLocaleString('fr-FR')}</td>
+                <td className="px-6 py-4 font-medium">{e.to}</td>
+                <td className="px-6 py-4 uppercase font-bold text-slate-400">{e.propertyId}</td>
+                <td className="px-6 py-4 truncate max-w-xs text-slate-600">{e.subject}</td>
+            </tr>)}</tbody></table>
+          ) : (
+            <div className="p-12 text-center text-slate-400">Aucun email archivé à afficher.</div>
+          )
         )}
       </div>
     </div>
