@@ -589,7 +589,10 @@ interface CalendarEvent {
   summary: string;
   description?: string;
   startDate: string;
-  endDate?: string;
+  startTime?: string | null;   // HH:MM in Europe/Paris, null for all-day
+  endDate: string;
+  endTime?: string | null;     // HH:MM in Europe/Paris, null for all-day
+  isAllDay?: boolean;
   eventType: 'checkin' | 'checkout' | 'reservation' | 'blocked';
   source: 'ical';
 }
@@ -673,16 +676,26 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
 
       let startD = e.startDate;
       let endD = e.endDate || e.startDate;
-      // iCal DTEND is exclusive — subtract 1 day for display
-      if (endD > startD) {
+      // For all-day events, iCal DTEND is exclusive → subtract 1 day.
+      // For timed events the parser already handles this correctly.
+      if (e.isAllDay && endD > startD) {
         const ed = new Date(endD + 'T12:00:00');
         ed.setDate(ed.getDate() - 1);
         endD = ed.toISOString().split('T')[0];
       }
 
+      // Build time hint for band label
+      const timeHint = (() => {
+        if (e.isAllDay) return '';
+        if (e.eventType === 'checkin' && e.startTime) return ` · ${e.startTime}`;
+        if (e.eventType === 'checkout' && e.endTime) return ` · ${e.endTime}`;
+        if (e.startTime) return ` · ${e.startTime}`;
+        return '';
+      })();
+
       bands.push({
         id: e.uid,
-        label: `${prefix} ${e.summary}`,
+        label: `${prefix} ${e.summary}${timeHint}`,
         startDate: startD,
         endDate: endD,
         color: style.color,
@@ -965,7 +978,27 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
           })()}
           {!selectedBand.isMission && (() => {
             const e = selectedBand.rawData as CalendarEvent;
-            return e.description ? <p className="text-sm text-slate-500 italic">{e.description}</p> : null;
+            return (
+              <div className="space-y-2">
+                {!e.isAllDay && (e.startTime || e.endTime) && (
+                  <div className="flex gap-3">
+                    {e.startTime && (
+                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 flex-1">
+                        <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-0.5">Arrivée</p>
+                        <p className="font-bold text-slate-700 text-sm">🕐 {e.startTime}</p>
+                      </div>
+                    )}
+                    {e.endTime && (
+                      <div className="bg-orange-50 border border-orange-100 rounded-xl px-4 py-3 flex-1">
+                        <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-0.5">Départ</p>
+                        <p className="font-bold text-slate-700 text-sm">🕐 {e.endTime}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {e.description && <p className="text-sm text-slate-500 italic mt-1">{e.description}</p>}
+              </div>
+            );
           })()}
         </div>
       )}

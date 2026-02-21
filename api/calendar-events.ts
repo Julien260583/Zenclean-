@@ -27,13 +27,6 @@ const PROPERTIES_CONFIG = [
   }
 ];
 
-function parseIcalDate(raw: string): string | null {
-  const match = raw.match(/(\d{8})/);
-  if (!match) return null;
-  const d = match[1];
-  return `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`;
-}
-
 // Unfold iCal content lines (continuation lines start with space or tab)
 function unfoldIcal(data: string): string {
   return data.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
@@ -41,15 +34,105 @@ function unfoldIcal(data: string): string {
 
 // Extract a single iCal property value, handling unfolded content
 function getProp(block: string, propName: string): string | null {
-  // Match property with optional parameters: PROPNAME or PROPNAME;params
   const regex = new RegExp(`^${propName}(?:;[^:]*)?:(.+)$`, 'm');
   const match = block.match(regex);
   return match ? match[1].trim() : null;
 }
 
+// Get the TZID parameter from a property line (e.g. DTSTART;TZID=Europe/Paris:20250215T120000)
+function getTzid(block: string, propName: string): string | null {
+  const regex = new RegExp(`^${propName};[^:]*TZID=([^:;]+)`, 'm');
+  const match = block.match(regex);
+  return match ? match[1].trim() : null;
+}
+
+/**
+ * Parse an iCal datetime value into { date: 'YYYY-MM-DD', time: 'HH:MM', isAllDay: boolean }
+ *
+ * Supported formats:
+ *   20250215                    → all-day date
+ *   20250215T120000             → local datetime (no timezone → assume Europe/Paris)
+ *   20250215T110000Z            → UTC datetime → convert to Europe/Paris
+ *   TZID=Europe/Paris:20250215T120000 → zoned datetime
+ */
+function parseIcalDateTime(raw: string, tzid: string | null): { date: string; time: string | null; isAllDay: boolean } {
+  const allDayMatch = raw.match(/^(\d{8})$/);
+  if (allDayMatch) {
+    const d = allDayMatch[1];
+    return {
+      date: `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`,
+      time: null,
+      isAllDay: true
+    };
+  }
+
+  // Datetime: 20250215T120000Z or 20250215T120000
+  const dtMatch = raw.match(/^(\d{8})T(\d{2})(\d{2})(\d{2})(Z?)$/);
+  if (!dtMatch) {
+    // Fallback: just extract date digits
+    const fallback = raw.match(/(\d{8})/);
+    if (!fallback) return { date: '', time: null, isAllDay: true };
+    const d = fallback[1];
+    return { date: `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`, time: null, isAllDay: true };
+  }
+
+  const [, datePart, hh, mm, , isUTC] = dtMatch;
+  const year = parseInt(datePart.substring(0, 4));
+  const month = parseInt(datePart.substring(4, 6)) - 1;
+  const day = parseInt(datePart.substring(6, 8));
+  const hour = parseInt(hh);
+  const minute = parseInt(mm);
+
+  let localDate: Date;
+  if (isUTC === 'Z') {
+    // UTC → convert to Europe/Paris using Intl
+    localDate = new Date(Date.UTC(year, month, day, hour, minute, 0));
+  } else {
+    // Local time — treat as Europe/Paris (UTC+1 winter, UTC+2 summer)
+    // Simple heuristic: use the date as-is, convert using Paris offset
+    localDate = new Date(Date.UTC(year, month, day, hour, minute, 0));
+    // Determine Paris offset: last Sunday of March → +2, last Sunday of Oct → +1
+    const parisOffset = getParisDSTOffset(localDate);
+    localDate = new Date(localDate.getTime() - parisOffset * 60 * 60 * 1000);
+  }
+
+  // Now express in Europe/Paris local time
+  const parisStr = localDate.toLocaleString('sv-SE', { timeZone: 'Europe/Paris' });
+  // sv-SE gives "YYYY-MM-DD HH:MM:SS"
+  const [dateParsed, timeParsed] = parisStr.split(' ');
+  const timeFormatted = timeParsed ? timeParsed.substring(0, 5) : null; // HH:MM
+
+  return { date: dateParsed, time: timeFormatted, isAllDay: false };
+}
+
+// Returns the UTC offset in hours for Europe/Paris at a given UTC date
+function getParisDSTOffset(utcDate: Date): number {
+  // Europe/Paris is UTC+1 (CET) or UTC+2 (CEST)
+  // DST starts last Sunday of March at 02:00, ends last Sunday of October at 03:00
+  const year = utcDate.getUTCFullYear();
+
+  // Last Sunday of March
+  const dstStart = lastSundayOf(year, 2); // month 2 = March (0-indexed)
+  dstStart.setUTCHours(1, 0, 0, 0); // 02:00 Paris = 01:00 UTC
+
+  // Last Sunday of October
+  const dstEnd = lastSundayOf(year, 9); // month 9 = October (0-indexed)
+  dstEnd.setUTCHours(1, 0, 0, 0); // 03:00 Paris CEST = 01:00 UTC
+
+  if (utcDate >= dstStart && utcDate < dstEnd) return 2; // CEST
+  return 1; // CET
+}
+
+function lastSundayOf(year: number, month: number): Date {
+  // Find last day of month
+  const lastDay = new Date(Date.UTC(year, month + 1, 0));
+  const dayOfWeek = lastDay.getUTCDay(); // 0=Sun
+  lastDay.setUTCDate(lastDay.getUTCDate() - dayOfWeek);
+  return lastDay;
+}
+
 function parseIcalEvents(icalData: string, propertyId: string) {
   const events: any[] = [];
-  // Unfold continuation lines first
   const unfolded = unfoldIcal(icalData);
   const blocks = unfolded.split('BEGIN:VEVENT');
   blocks.shift();
@@ -61,31 +144,36 @@ function parseIcalEvents(icalData: string, propertyId: string) {
       const startRaw = getProp(block, 'DTSTART');
       const endRaw = getProp(block, 'DTEND');
       const description = getProp(block, 'DESCRIPTION') || '';
+      const startTzid = getTzid(block, 'DTSTART');
+      const endTzid = getTzid(block, 'DTEND');
 
       if (!uid || !startRaw) continue;
 
-      const startDate = parseIcalDate(startRaw);
-      const endDate = endRaw ? parseIcalDate(endRaw) : startDate;
+      const startParsed = parseIcalDateTime(startRaw, startTzid);
+      const endParsed = endRaw ? parseIcalDateTime(endRaw, endTzid) : null;
 
-      if (!startDate) continue;
+      if (!startParsed.date) continue;
 
-      // Determine event type from summary and description keywords
+      // For multi-day all-day events, DTEND is exclusive (standard iCal).
+      // For timed events, DTEND is the actual end moment — keep as-is.
+      let endDate = endParsed ? endParsed.date : startParsed.date;
+      let endTime = endParsed ? endParsed.time : null;
+
+      if (endParsed && startParsed.isAllDay && endParsed.isAllDay && endDate > startParsed.date) {
+        // All-day: subtract 1 day from exclusive DTEND
+        const ed = new Date(endDate + 'T12:00:00');
+        ed.setDate(ed.getDate() - 1);
+        endDate = ed.toISOString().split('T')[0];
+      }
+
+      // Determine event type
       let eventType: 'checkin' | 'checkout' | 'reservation' | 'blocked' = 'reservation';
       const textLower = (summary + ' ' + description).toLowerCase();
-      if (
-        textLower.includes('check-out') || textLower.includes('checkout') ||
-        textLower.includes('départ') || textLower.includes('depart')
-      ) {
+      if (textLower.includes('check-out') || textLower.includes('checkout') || textLower.includes('départ') || textLower.includes('depart')) {
         eventType = 'checkout';
-      } else if (
-        textLower.includes('check-in') || textLower.includes('checkin') ||
-        textLower.includes('arrivée') || textLower.includes('arrivee') || textLower.includes('arrival')
-      ) {
+      } else if (textLower.includes('check-in') || textLower.includes('checkin') || textLower.includes('arrivée') || textLower.includes('arrivee') || textLower.includes('arrival')) {
         eventType = 'checkin';
-      } else if (
-        textLower.includes('blocked') || textLower.includes('indisponible') ||
-        textLower.includes('not available') || textLower.includes('fermé') || textLower.includes('unavailable')
-      ) {
+      } else if (textLower.includes('blocked') || textLower.includes('indisponible') || textLower.includes('not available') || textLower.includes('fermé') || textLower.includes('unavailable')) {
         eventType = 'blocked';
       }
 
@@ -93,9 +181,12 @@ function parseIcalEvents(icalData: string, propertyId: string) {
         uid,
         propertyId,
         summary,
-        description: description.substring(0, 500), // cap description length
-        startDate,
-        endDate: endDate || startDate,
+        description: description.substring(0, 500),
+        startDate: startParsed.date,
+        startTime: startParsed.time,       // e.g. "16:00" or null for all-day
+        endDate,
+        endTime,                            // e.g. "11:00" or null for all-day
+        isAllDay: startParsed.isAllDay,
         eventType,
         source: 'ical',
         updatedAt: new Date()
