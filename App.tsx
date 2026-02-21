@@ -671,7 +671,7 @@ const AgentCalendarView: FC<{ missions: Mission[]; currentCleaner: Cleaner; onUp
 
       <div className="md:hidden divide-y divide-slate-100">
         {Object.keys(groupedMissions).length > 0 ? (
-          Object.entries(groupedMissions).map(([date, dayMissions]) => (
+          (Object.entries(groupedMissions) as [string, Mission[]][]).map(([date, dayMissions]) => (
             <div key={date} className="p-4">
               <div className="font-bold text-base mb-3 text-slate-600">
                 {new Date(date + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric' })}

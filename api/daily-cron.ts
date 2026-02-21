@@ -114,6 +114,11 @@ export default async function handler(req: any, res: any) {
             const emailJobs: any[] = [];
 
             for (const mission of newMissionsForNotif) {
+                // Filtre de sécurité : ne jamais notifier pour une nouvelle mission passée.
+                if (mission.date < todayStr) {
+                    console.warn(`[SAFETY NET] Skipping new mission notification for past date: ${mission.id} on ${mission.date}`);
+                    continue;
+                }
                 const eligibleAgents = allCleaners.filter(c => c.assignedProperties?.includes(mission.propertyId));
                 for (const agent of eligibleAgents) {
                     const dedupKey = `new-mission-${mission.id}-${agent.id}`;
