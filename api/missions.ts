@@ -1,6 +1,7 @@
 
 import clientPromise from './lib/mongodb.js';
 import { ObjectId } from 'mongodb';
+import { sendEmail } from './lib/email.js';
 
 export default async function handler(req: any, res: any) {
     try {
@@ -15,11 +16,54 @@ export default async function handler(req: any, res: any) {
 
             case 'POST':
                 const newMissionData = req.body;
-                // Enlever un éventuel _id pour laisser MongoDB le générer
                 const { _id, ...missionToCreate } = newMissionData;
 
                 const result = await missionsCol.insertOne(missionToCreate);
                 const createdMission = await missionsCol.findOne({ _id: result.insertedId });
+
+                // Si la mission est créée manuellement, on envoie une notif
+                if (createdMission && createdMission.isManual) {
+                    const cleanersCol = db.collection("cleaners");
+                    const allCleaners = await cleanersCol.find({ email: { $exists: true, $ne: '' } }).toArray();
+                    const eligibleAgents = allCleaners.filter(c => c.assignedProperties?.includes(createdMission.propertyId));
+
+                    if (eligibleAgents.length > 0) {
+                        const emailsCol = db.collection("emails");
+                        const emailJobs = [];
+                        for (const agent of eligibleAgents) {
+                            const dedupKey = `new-mission-${createdMission.id || createdMission._id}-${agent.id}`;
+                            emailJobs.push({
+                                to: agent.email,
+                                subject: `[NOUVEAU] Mission manuelle : ${createdMission.propertyId.toUpperCase()} (${createdMission.date})`,
+                                html: `<p>Bonjour ${agent.name}, une nouvelle mission manuelle vient d'être ajoutée pour ${createdMission.propertyId.toUpperCase()} le ${createdMission.date}.</p>`,
+                                propertyId: createdMission.propertyId,
+                                dedupKey: dedupKey
+                            });
+                        }
+                        
+                        const emailSendPromises = emailJobs.map(async (job) => {
+                            try {
+                                const response = await sendEmail(job.to, job.subject, job.html);
+                                return { ...job, status: response && response.ok ? 'sent' : 'failed' };
+                            } catch (error) {
+                                return { ...job, status: 'failed' };
+                            }
+                        });
+
+                        const results = await Promise.all(emailSendPromises);
+                        const sentJobs = results.filter(r => r.status === 'sent');
+                        if (sentJobs.length > 0) {
+                            const docsToInsert = sentJobs.map(job => ({ 
+                                to: job.to, 
+                                subject: job.subject, 
+                                propertyId: job.propertyId, 
+                                dedupKey: job.dedupKey, 
+                                sentAt: new Date() 
+                            }));
+                            await emailsCol.insertMany(docsToInsert);
+                        }
+                    }
+                }
 
                 return res.status(201).json(createdMission);
 
@@ -51,10 +95,8 @@ export default async function handler(req: any, res: any) {
 
                 let deleteFilter;
                 try {
-                    // Essayer de convertir en ObjectId pour les missions créées manuellement
                     deleteFilter = { _id: new ObjectId(deleteId) };
                 } catch (e) {
-                    // Fallback pour les missions synchronisées depuis le calendrier (id: 'cal-...')
                     deleteFilter = { id: deleteId };
                 }
 

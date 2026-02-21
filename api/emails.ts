@@ -64,16 +64,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const oneMonthAgo = new Date();
             oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
 
-            const result = await db.collection("emails").deleteMany({ sentAt: { $lt: oneMonthAgo } });
+            // Purge old emails
+            const emailResult = await db.collection("emails").deleteMany({ sentAt: { $lt: oneMonthAgo } });
+
+            // Purge old mission notes
+            const missionsCol = db.collection("missions");
+            const oneMonthAgoStr = oneMonthAgo.toISOString().split('T')[0];
+            const noteResult = await missionsCol.updateMany(
+                { 
+                    date: { $lt: oneMonthAgoStr },
+                    notes: { $exists: true, $ne: "" } 
+                },
+                { $set: { notes: "" } }
+            );
+
+            const message = `${emailResult.deletedCount} emails et ${noteResult.modifiedCount} notes ont été purgés.`;
 
             return res.status(200).json({
                 success: true,
-                message: `${result.deletedCount} anciens emails ont été purgés.`,
-                deletedCount: result.deletedCount,
+                message: message,
             });
         } catch (error: any) {
-            console.error("API Error cleanup-emails:", error);
-            return res.status(500).json({ error: error.message || "Une erreur est survenue lors du nettoyage des e-mails." });
+            console.error("API Error cleanup:", error);
+            return res.status(500).json({ error: error.message || "Une erreur est survenue lors de la purge." });
         }
     } else {
         return res.status(400).json({ message: "Action non spécifiée ou invalide" });
