@@ -26,7 +26,7 @@ export interface Mission {
   id: string;
   _id?: string; // ID MongoDB
   propertyId: PropertyKey;
-  cleanerId?: string;
+  cleanerId?: string | null;
   date: string;
   startTime: string;
   endTime: string;

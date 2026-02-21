@@ -25,7 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const collection = db.collection("emails");
 
   if (req.method === 'GET') {
-    const emails = await collection.find({}).sort({ sentAt: -1 }).toArray();
+    const emails = await collection.find({}).sort({ sentAt: -1 }).limit(50).toArray();
     return res.status(200).json(emails);
   }
 
@@ -40,7 +40,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const mailjetResponse = await sendEmail(ADMIN_EMAIL, subject, html);
 
         if (mailjetResponse && mailjetResponse.ok) {
-            return res.status(200).json({ success: true, message: "Email de test envoyé avec succès à " + ADMIN_EMAIL });
+            const emailLog = {
+                to: ADMIN_EMAIL,
+                subject: subject,
+                propertyId: 'N/A (Test)',
+                sentAt: new Date(),
+            };
+            await collection.insertOne(emailLog);
+            
+            return res.status(200).json({ success: true, message: "Email de test envoyé et archivé avec succès." });
         } else {
             const errorText = mailjetResponse ? await mailjetResponse.text() : "Réponse indéfinie de la fonction sendEmail.";
             console.error("Mailjet API Error:", errorText);
@@ -53,18 +61,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     } else if (action === 'cleanup') {
         try {
-            // Date limite : e-mails envoyés il y a plus de 30 jours
             const oneMonthAgo = new Date();
             oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
 
-            const result = await db.collection("emails").deleteMany({
-                sentAt: { $lt: oneMonthAgo }
-            });
+            const result = await db.collection("emails").deleteMany({ sentAt: { $lt: oneMonthAgo } });
 
             return res.status(200).json({
                 success: true,
+                message: `${result.deletedCount} anciens emails ont été purgés.`,
                 deletedCount: result.deletedCount,
-                thresholdDate: oneMonthAgo.toISOString()
             });
         } catch (error: any) {
             console.error("API Error cleanup-emails:", error);

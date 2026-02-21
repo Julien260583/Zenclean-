@@ -772,7 +772,7 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
                         <div className="absolute left-6 top-full mt-2 bg-white border shadow-2xl rounded-2xl p-2 z-[60] w-64 animate-in fade-in slide-in-from-top-2">
                           <div className="flex justify-between items-center px-2 py-1 mb-2 border-b"><span className="text-[10px] font-black text-slate-400 uppercase">Choisir l'agent</span><button onClick={() => setActivePicker(null)} className="text-slate-300 hover:text-slate-500"><X size={14}/></button></div>
                           <div className="grid grid-cols-1 gap-1">
-                            <button onClick={() => { onUpdateMission({...m, cleanerId: undefined}); setActivePicker(null); }} className="flex items-center gap-3 p-2 hover:bg-red-50 text-red-500 rounded-xl transition-colors text-left">
+                            <button onClick={() => { onUpdateMission({...m, cleanerId: null}); setActivePicker(null); }} className="flex items-center gap-3 p-2 hover:bg-red-50 text-red-500 rounded-xl transition-colors text-left">
                               <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center"><X size={16}/></div><span className="font-bold text-xs">Retirer l'agent</span>
                             </button>
                             {cleaners.filter(c => c.assignedProperties.includes(m.propertyId)).map(c => (
@@ -987,52 +987,77 @@ const AgentFinanceView: FC<{ missions: Mission[]; currentCleaner: Cleaner }> = (
 
 const EmailsArchiveView: FC<{onDataRefresh: () => void, onSync: () => void, isSyncing: boolean}> = ({ onDataRefresh, onSync, isSyncing }) => {
   const [emails, setEmails] = useState<any[]>([]);
-  const [isPurging, setIsPurging] = useState(false);
-  const [isTestingMail, setIsTestingMail] = useState(false);
-  const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [actionStatus, setActionStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [isActionRunning, setIsActionRunning] = useState(false);
 
-  const loadEmails = () => { setStatus(null); fetch('/api/emails').then(r => r.json()).then(setEmails); };
-  useEffect(loadEmails, []);
-
-  const handleAction = async (action: () => Promise<any>, successMsg: string, errorMsg: string) => {
-    setStatus(null);
+  const loadEmails = async () => {
+    setLoading(true);
     try {
-      const response = await action();
-      const resData = await response.json();
-      if (response.ok) setStatus({ type: 'success', message: resData.message || successMsg });
-      else setStatus({ type: 'error', message: resData.error || errorMsg });
-    } catch (error) {
-      setStatus({ type: 'error', message: 'Impossible de joindre l\'API.' });
-    }
+      const res = await fetch('/api/emails');
+      const data = await res.json();
+      setEmails(data);
+    } catch (e) { console.error(e); } 
+    finally { setLoading(false); }
   };
 
-  const handleSyncAndRefresh = async () => { await onSync(); loadEmails(); };
-  const handlePurge = () => handleAction(() => fetch('/api/cleanup-emails', { method: 'POST' }), 'Purge réussie', 'Erreur de purge');
-  const handleTestEmail = () => handleAction(() => fetch('/api/emails?action=test', { method: 'POST' }), 'Email envoyé', 'Erreur d\'envoi');
-  
-  const isActionRunning = isSyncing || isPurging || isTestingMail;
+  useEffect(() => { loadEmails(); }, []);
+
+  const performAction = async (actionFn: () => Promise<any>) => {
+    if (isActionRunning) return;
+    setIsActionRunning(true);
+    setActionStatus(null);
+    try {
+      const response = await actionFn();
+      const resData = await response.json();
+      if (response.ok) {
+        setActionStatus({ type: 'success', message: resData.message });
+      } else {
+        setActionStatus({ type: 'error', message: resData.error || 'Une erreur est survenue.' });
+      }
+    } catch (error) {
+      setActionStatus({ type: 'error', message: 'Impossible de joindre l\'API.' });
+    }
+    await loadEmails(); // Reload emails after any action
+    setIsActionRunning(false);
+  };
+
+  const handleSyncAndRefresh = () => performAction(async () => { await onSync(); return {ok: true, json: async () => ({message: "Synchronisation terminée"}) } });
+  const handlePurge = () => {
+    if (confirm("Voulez-vous vraiment purger les anciens emails?")) {
+      performAction(() => fetch('/api/emails?action=cleanup', { method: 'POST' }));
+    }
+  };
+  const handleTestEmail = () => performAction(() => fetch('/api/emails?action=test', { method: 'POST' }));
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap justify-between items-center gap-4">
-        <h2 className="text-2xl font-black text-[#1A2D42]">Zone Technique</h2>
+        <h2 className="text-2xl font-black text-[#1A2D42]">Zone Technique & Emails</h2>
         <div className="flex flex-wrap items-center gap-3">
-           <button onClick={handleSyncAndRefresh} disabled={isActionRunning} className="bg-blue-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><RefreshCw className={`size-4 ${isSyncing ? 'animate-spin':''}`} /> Màj & Notifs</button>
-           <button onClick={handleTestEmail} disabled={isActionRunning} className="bg-slate-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><MailQuestion className={`size-4 ${isTestingMail ? 'animate-spin':''}`} /> Test Mail</button>
-           <button onClick={() => { if(confirm("Voulez-vous vraiment purger les anciens emails?")) handlePurge() }} disabled={isActionRunning} className="bg-red-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><Trash2 className={`size-4 ${isPurging ? 'animate-spin':''}`} /> Purger</button>
+           <button onClick={handleSyncAndRefresh} disabled={isActionRunning} className="bg-blue-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><RefreshCw className={`size-4 ${isSyncing || isActionRunning ? 'animate-spin':''}`} /> Màj & Notifs</button>
+           <button onClick={handleTestEmail} disabled={isActionRunning} className="bg-slate-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><MailQuestion className={`size-4 ${isActionRunning ? 'animate-spin':''}`} /> Test Mail</button>
+           <button onClick={handlePurge} disabled={isActionRunning} className="bg-red-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><Trash2 className={`size-4 ${isActionRunning ? 'animate-spin':''}`} /> Purger</button>
         </div>
       </div>
-      {status && <div className={`p-4 rounded-2xl border font-bold text-sm ${status.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>{status.message}</div>}
+      {actionStatus && <div className={`p-4 rounded-2xl border font-bold text-sm ${actionStatus.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>{actionStatus.message}</div>}
       <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
         <div className="px-6 py-5 border-b bg-slate-50/50"><h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">Emails Récemment Archivés</h3></div>
-        <table className="w-full text-left"><thead className="bg-slate-50 text-[10px] uppercase font-black tracking-widest text-slate-400"><tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">À</th><th className="px-6 py-4">Sujet</th></tr></thead>
-        <tbody className="divide-y">{(emails || []).map(e => <tr key={e._id} className="text-xs hover:bg-slate-50"><td className="px-6 py-4 whitespace-nowrap">{new Date(e.sentAt).toLocaleString()}</td><td className="px-6 py-4">{e.to}</td><td className="px-6 py-4 truncate max-w-xs">{e.subject}</td></tr>)}</tbody></table>
+        {loading ? <div className="p-12 text-center text-slate-400">Chargement...</div> : (
+        <table className="w-full text-left"><thead className="bg-slate-50 text-[10px] uppercase font-black tracking-widest text-slate-400"><tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">Destinataire</th><th className="px-6 py-4">Mission</th><th className="px-6 py-4">Sujet</th></tr></thead>
+        <tbody className="divide-y">{(emails || []).map(e => <tr key={e._id} className="text-xs hover:bg-slate-50">
+            <td className="px-6 py-4 whitespace-nowrap text-slate-500">{new Date(e.sentAt).toLocaleString('fr-FR')}</td>
+            <td className="px-6 py-4 font-medium">{e.to}</td>
+            <td className="px-6 py-4 uppercase font-bold text-slate-400">{e.propertyId}</td>
+            <td className="px-6 py-4 truncate max-w-xs text-slate-600">{e.subject}</td>
+        </tr>)}</tbody></table>
+        )}
       </div>
     </div>
   );
 };
 
-const StatusBadge: FC<{ status: Mission['status']; cleanerId?: string }> = ({ status, cleanerId }) => {
+const StatusBadge: FC<{ status: Mission['status']; cleanerId?: string | null }> = ({ status, cleanerId }) => {
   if (status === 'completed') return <span className="text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg">Traité</span>;
   if (!cleanerId) return <span className="text-[9px] font-black uppercase tracking-wider bg-red-100 text-red-600 px-2 py-1 rounded-lg">Libre</span>;
   return <span className="text-[9px] font-black uppercase tracking-wider bg-blue-100 text-blue-600 px-2 py-1 rounded-lg">Assigné</span>;
