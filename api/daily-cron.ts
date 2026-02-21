@@ -37,7 +37,7 @@ export default async function handler(req: any, res: any) {
         const calendarDataPromises = PROPERTIES_CONFIG.map(async (prop) => {
             try {
                 const icalUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(prop.calendarId)}/public/basic.ics`;
-                const response = await fetch(icalUrl, { signal: AbortSignal.timeout(8000) }); // Timeout de 8s
+                const response = await fetch(icalUrl, { signal: AbortSignal.timeout(8000) });
                 if (!response.ok) {
                     console.warn(`Failed to fetch calendar for ${prop.id}. Status: ${response.status}`);
                     return { prop, events: [] };
@@ -47,7 +47,7 @@ export default async function handler(req: any, res: any) {
                 return { prop, events };
             } catch (error) {
                 console.error(`Error fetching or parsing calendar for ${prop.id}:`, error);
-                return { prop, events: [] }; // Renvoyer un tableau vide en cas d'erreur
+                return { prop, events: [] };
             }
         });
 
@@ -113,14 +113,13 @@ export default async function handler(req: any, res: any) {
 
             const emailJobs: any[] = [];
 
-            // Notifications pour les nouvelles missions
             for (const mission of newMissionsForNotif) {
                 const eligibleAgents = allCleaners.filter(c => c.assignedProperties?.includes(mission.propertyId));
                 for (const agent of eligibleAgents) {
                     const dedupKey = `new-mission-${mission.id}-${agent.id}`;
                     if (!emailDedupKeys.has(dedupKey)) {
-                        emailJobs.push({ to: agent.email, subject: `[NOUVEAU] Mission : ${mission.propertyId.toUpperCase()} (${mission.date})`, html: `<p>Bonjour ${agent.name}, une mission est disponible pour ${mission.propertyId.toUpperCase()} le ${mission.date}.</p>`, dedupKey });
-                        emailDedupKeys.add(dedupKey); // Evite double envoi dans la même session
+                        emailJobs.push({ to: agent.email, subject: `[NOUVEAU] Mission : ${mission.propertyId.toUpperCase()} (${mission.date})`, html: `<p>Bonjour ${agent.name}, une mission est disponible pour ${mission.propertyId.toUpperCase()} le ${mission.date}.</p>`, propertyId: mission.propertyId, dedupKey });
+                        emailDedupKeys.add(dedupKey);
                     }
                 }
             }
@@ -136,11 +135,9 @@ export default async function handler(req: any, res: any) {
                     if (cleaner?.email) {
                         const dedupKey = `reminder-j0-${mission.id}-${todayStr}`;
                         if (!emailDedupKeys.has(dedupKey)) {
-                            emailJobs.push({ to: cleaner.email, subject: `[RAPPEL] Mission aujourd'hui : ${mission.propertyId.toUpperCase()}`, html: `<p>Bonjour ${cleaner.name}, rappel de votre mission aujourd'hui.</p>`, dedupKey });
+                            emailJobs.push({ to: cleaner.email, subject: `[RAPPEL] Mission aujourd'hui : ${mission.propertyId.toUpperCase()}`, html: `<p>Bonjour ${cleaner.name}, rappel de votre mission aujourd'hui.</p>`, propertyId: mission.propertyId, dedupKey });
                             emailDedupKeys.add(dedupKey);
                         }
-                    } else {
-                        console.warn(`Data inconsistency: Cleaner ID ${mission.cleanerId} not found for mission ${mission.id}`);
                     }
                 }
                 if (mission.date === in7DaysStr && mission.status === 'pending') {
@@ -148,7 +145,7 @@ export default async function handler(req: any, res: any) {
                     for (const agent of eligible) {
                         const dedupKey = `alert-j7-${mission.id}-${agent.id}`;
                         if (!emailDedupKeys.has(dedupKey)){
-                            emailJobs.push({ to: agent.email, subject: `[URGENT J-7] Mission toujours libre : ${mission.propertyId.toUpperCase()}`, html: `<p>La mission du ${mission.date} n'est toujours pas assignée.</p>`, dedupKey });
+                            emailJobs.push({ to: agent.email, subject: `[URGENT J-7] Mission libre : ${mission.propertyId.toUpperCase()}`, html: `<p>La mission du ${mission.date} n'est toujours pas assignée.</p>`, propertyId: mission.propertyId, dedupKey });
                             emailDedupKeys.add(dedupKey);
                         }
                     }
@@ -159,22 +156,15 @@ export default async function handler(req: any, res: any) {
             for (const mission of overdueMissions) {
                 const dedupKey = `overdue-alert-${mission.id}`;
                 if (!emailDedupKeys.has(dedupKey)) {
-                    emailJobs.push({ to: ADMIN_EMAIL, subject: `[ALERTE RETARD] Mission non traitée : ${mission.propertyId.toUpperCase()}`, html: `<p>La mission du <strong>${mission.date}</strong> pour <strong>${mission.propertyId.toUpperCase()}</strong> est en retard. Statut actuel : ${mission.status}.</p>`, dedupKey });
+                    emailJobs.push({ to: ADMIN_EMAIL, subject: `[ALERTE RETARD] Mission non traitée : ${mission.propertyId.toUpperCase()}`, html: `<p>La mission du <strong>${mission.date}</strong> pour <strong>${mission.propertyId.toUpperCase()}</strong> est en retard. Statut actuel : ${mission.status}.</p>`, propertyId: mission.propertyId, dedupKey });
                     emailDedupKeys.add(dedupKey);
                 }
             }
             
-            // Envoi des emails en parallèle avec gestion d'erreur individuelle
             const emailSendPromises = emailJobs.map(async (job) => {
                 try {
                     const response = await sendEmail(job.to, job.subject, job.html);
-                    if (response && response.ok) {
-                        return { ...job, status: 'sent' };
-                    } else {
-                        const errorInfo = response ? `Status: ${response.status}` : "No response";
-                        console.error(`Failed to send email to ${job.to}. ${errorInfo}`);
-                        return { ...job, status: 'failed' };
-                    }
+                    return { ...job, status: response && response.ok ? 'sent' : 'failed' };
                 } catch (error) {
                     console.error(`Error sending email to ${job.to}:`, error);
                     return { ...job, status: 'failed' };
@@ -184,7 +174,13 @@ export default async function handler(req: any, res: any) {
             const results = await Promise.all(emailSendPromises);
             const sentJobs = results.filter(r => r.status === 'sent');
             if (sentJobs.length > 0) {
-                const docsToInsert = sentJobs.map(job => ({ to: job.to, subject: job.subject, dedupKey: job.dedupKey, sentAt: new Date() }));
+                const docsToInsert = sentJobs.map(job => ({ 
+                    to: job.to, 
+                    subject: job.subject, 
+                    propertyId: job.propertyId, 
+                    dedupKey: job.dedupKey, 
+                    sentAt: new Date() 
+                }));
                 await emailsCol.insertMany(docsToInsert);
             }
         }

@@ -318,7 +318,7 @@ const App: FC = () => {
           <div className="max-w-7xl mx-auto">
             {activeTab === 'dashboard' && <DashboardView missions={missions} cleaners={cleaners} onUpdateMission={handleUpdateMission} />}
             {activeTab === 'calendar' && <CalendarsTabView onSync={handleManualSync} isSyncing={isSyncing} />}
-            {activeTab === 'agent-calendar' && isAgent && <AgentCalendarView missions={missions} currentCleaner={currentUser} />}
+            {activeTab === 'agent-calendar' && isAgent && <AgentCalendarView missions={missions} currentCleaner={currentUser} onUpdateMission={handleUpdateMission} />}
             {activeTab === 'missions' && (
               <MissionsTableView 
                 missions={missions} 
@@ -347,7 +347,7 @@ const App: FC = () => {
             )}
             {activeTab === 'finance' && <FinanceView missions={missions} cleaners={cleaners} />}
             {activeTab === 'agent-finance' && isAgent && <AgentFinanceView missions={missions} currentCleaner={currentUser} />}
-            {activeTab === 'emails' && <EmailsArchiveView onDataRefresh={loadInitialData} onSync={handleManualSync} isSyncing={isSyncing} />}
+            {activeTab === 'emails' && <EmailsArchiveView onSync={handleManualSync} isSyncing={isSyncing} />}
           </div>
         </div>
       </main>
@@ -617,7 +617,7 @@ const CalendarsTabView: FC<{ onSync: () => void; isSyncing: boolean }> = ({ onSy
   );
 };
 
-const AgentCalendarView: FC<{ missions: Mission[]; currentCleaner: Cleaner }> = ({ missions, currentCleaner }) => {
+const AgentCalendarView: FC<{ missions: Mission[]; currentCleaner: Cleaner; onUpdateMission: (mission: Mission) => void; }> = ({ missions, currentCleaner, onUpdateMission }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
 
   const month = currentDate.getMonth();
@@ -628,11 +628,35 @@ const AgentCalendarView: FC<{ missions: Mission[]; currentCleaner: Cleaner }> = 
     return missions.filter(m => m.date === dayStr && (m.cleanerId === currentCleaner.id || (!m.cleanerId && currentCleaner.assignedProperties.includes(m.propertyId))));
   };
 
-  const gridDays = [];
-  const startDay = (new Date(year, month, 1).getDay() + 6) % 7; // Lundi = 0
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  for (let i = 0; i < startDay; i++) gridDays.push(null);
-  for (let d = 1; d <= daysInMonth; d++) gridDays.push(d);
+  const gridDays = useMemo(() => {
+    const days = [];
+    const startDay = (new Date(year, month, 1).getDay() + 6) % 7; 
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    for (let i = 0; i < startDay; i++) days.push(null);
+    for (let d = 1; d <= daysInMonth; d++) days.push(d);
+    return days;
+  }, [month, year]);
+
+  const missionsForMonth = useMemo(() => {
+    return missions
+      .filter(m => {
+        const missionDate = new Date(m.date + "T00:00:00");
+        return missionDate.getFullYear() === year && missionDate.getMonth() === month;
+      })
+      .filter(m => m.cleanerId === currentCleaner.id || (!m.cleanerId && currentCleaner.assignedProperties.includes(m.propertyId)))
+      .sort((a, b) => new Date(a.date + "T00:00:00").getTime() - new Date(b.date + "T00:00:00").getTime());
+  }, [missions, currentCleaner, month, year]);
+
+  const groupedMissions = useMemo(() => {
+    return missionsForMonth.reduce((acc, mission) => {
+      const date = mission.date;
+      if (!acc[date]) {
+        acc[date] = [];
+      }
+      acc[date].push(mission);
+      return acc;
+    }, {} as Record<string, Mission[]>);
+  }, [missionsForMonth]);
 
   return (
     <div className="bg-white rounded-[40px] border shadow-xl shadow-slate-200/50">
@@ -644,34 +668,76 @@ const AgentCalendarView: FC<{ missions: Mission[]; currentCleaner: Cleaner }> = 
           <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl transition-colors"><ChevronRight size={20} /></button>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <div className="min-w-[980px]">
-          <div className="grid grid-cols-7 border-b text-[10px] font-black uppercase tracking-widest text-slate-400 text-center">
-            {['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'].map(d => <div key={d} className="py-4">{d}</div>)}
+
+      <div className="md:hidden divide-y divide-slate-100">
+        {Object.keys(groupedMissions).length > 0 ? (
+          Object.entries(groupedMissions).map(([date, dayMissions]) => (
+            <div key={date} className="p-4">
+              <div className="font-bold text-base mb-3 text-slate-600">
+                {new Date(date + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric' })}
+              </div>
+              <div className="space-y-3">
+                {dayMissions.map(m => {
+                  const prop = PROPERTIES.find(p => p.id === m.propertyId);
+                  const isMine = m.cleanerId === currentCleaner.id;
+                  return (
+                    <div key={m._id || m.id} className={`p-3 rounded-xl flex items-center gap-3 border ${isMine ? 'bg-white' : 'bg-orange-50 border-orange-200'}`}>
+                      <div className={`w-2.5 h-10 rounded-lg flex-shrink-0 ${prop?.color}`} />
+                      <div className="flex-grow">
+                        <p className="font-black text-sm uppercase text-slate-800">{m.propertyId}</p>
+                        <p className={`text-xs font-bold ${isMine ? 'text-slate-500' : 'text-orange-600'}`}>{isMine ? "Mission assignée" : "Disponible"}</p>
+                      </div>
+                      {!isMine && (
+                        <button
+                          onClick={() => onUpdateMission({ ...m, cleanerId: currentCleaner.id, status: 'assigned' })}
+                          className="bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-xs shadow-sm whitespace-nowrap"
+                        >
+                          Prendre
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="p-8 text-center text-slate-400 font-bold">
+            Aucune mission pour ce mois.
           </div>
-          <div className="grid grid-cols-7 auto-rows-[160px]">
-            {gridDays.map((day, idx) => {
-              if (day === null) return <div key={`empty-${idx}`} className="bg-slate-50/30 border-r border-b" />;
-              const isToday = day === new Date().getDate() && month === new Date().getMonth() && year === new Date().getFullYear();
-              return (
-                <div key={day} className={`p-2 border-r border-b relative group hover:bg-slate-50/50 transition-colors ${isToday ? 'bg-orange-50/20' : ''}`}>
-                  <span className={`text-xs font-black ${isToday ? 'bg-orange-500 text-white w-6 h-6 flex items-center justify-center rounded-lg shadow-md shadow-orange-200' : 'text-slate-400'}`}>{day}</span>
-                  <div className="mt-2 space-y-2 overflow-y-auto max-h-[120px]">
-                    {missionsForDay(day).map(m => {
-                      const prop = PROPERTIES.find(p => p.id === m.propertyId);
-                      const isMine = m.cleanerId === currentCleaner.id;
-                      return (
-                        <div key={m._id || m.id} className={`p-2 rounded-lg text-xs font-black uppercase flex items-center gap-2 border ${isMine ? 'bg-white border-slate-200 text-slate-800 shadow-sm' : 'bg-orange-50 border-orange-100 text-orange-600'}`} title={`${m.propertyId} - ${m.status}`}>
-                          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${prop?.color}`} />
-                          <span className="truncate">{m.propertyId}</span>
-                          {!isMine && <Zap size={12} className="text-orange-500 fill-orange-500 flex-shrink-0" />}
-                        </div>
-                      );
-                    })}
+        )}
+      </div>
+
+      <div className="hidden md:block">
+        <div className="overflow-x-auto">
+          <div className="min-w-[980px]">
+            <div className="grid grid-cols-7 border-b text-[10px] font-black uppercase tracking-widest text-slate-400 text-center">
+              {['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'].map(d => <div key={d} className="py-4">{d}</div>)}
+            </div>
+            <div className="grid grid-cols-7 auto-rows-[160px]">
+              {gridDays.map((day, idx) => {
+                if (day === null) return <div key={`empty-${idx}`} className="bg-slate-50/30 border-r border-b" />;
+                const isToday = day === new Date().getDate() && month === new Date().getMonth() && year === new Date().getFullYear();
+                return (
+                  <div key={day} className={`p-2 border-r border-b relative group hover:bg-slate-50/50 transition-colors ${isToday ? 'bg-orange-50/20' : ''}`}>
+                    <span className={`text-xs font-black ${isToday ? 'bg-orange-500 text-white w-6 h-6 flex items-center justify-center rounded-lg shadow-md shadow-orange-200' : 'text-slate-400'}`}>{day}</span>
+                    <div className="mt-2 space-y-2 overflow-y-auto max-h-[120px]">
+                      {missionsForDay(day).map(m => {
+                        const prop = PROPERTIES.find(p => p.id === m.propertyId);
+                        const isMine = m.cleanerId === currentCleaner.id;
+                        return (
+                          <div key={m._id || m.id} className={`p-2 rounded-lg text-xs font-black uppercase flex items-center gap-2 border ${isMine ? 'bg-white border-slate-200 text-slate-800 shadow-sm' : 'bg-orange-50 border-orange-100 text-orange-600'}`} title={`${m.propertyId} - ${m.status}`}>
+                            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${prop?.color}`} />
+                            <span className="truncate">{m.propertyId}</span>
+                            {!isMine && <Zap size={12} className="text-orange-500 fill-orange-500 flex-shrink-0" />}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
@@ -985,7 +1051,7 @@ const AgentFinanceView: FC<{ missions: Mission[]; currentCleaner: Cleaner }> = (
   );
 };
 
-const EmailsArchiveView: FC<{onDataRefresh: () => void, onSync: () => void, isSyncing: boolean}> = ({ onDataRefresh, onSync, isSyncing }) => {
+const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSync, isSyncing }) => {
   const [emails, setEmails] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionStatus, setActionStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
@@ -996,14 +1062,17 @@ const EmailsArchiveView: FC<{onDataRefresh: () => void, onSync: () => void, isSy
     try {
       const res = await fetch('/api/emails');
       const data = await res.json();
-      setEmails(data);
-    } catch (e) { console.error(e); } 
+      setEmails(Array.isArray(data) ? data : []);
+    } catch (e) { 
+        console.error(e);
+        setEmails([]);
+    } 
     finally { setLoading(false); }
   };
 
   useEffect(() => { loadEmails(); }, []);
 
-  const performAction = async (actionFn: () => Promise<any>) => {
+  const performAction = async (actionFn: () => Promise<any>, reload = true) => {
     if (isActionRunning) return;
     setIsActionRunning(true);
     setActionStatus(null);
@@ -1018,16 +1087,23 @@ const EmailsArchiveView: FC<{onDataRefresh: () => void, onSync: () => void, isSy
     } catch (error) {
       setActionStatus({ type: 'error', message: 'Impossible de joindre l\'API.' });
     }
-    await loadEmails(); // Reload emails after any action
+    if (reload) await loadEmails();
     setIsActionRunning(false);
   };
 
-  const handleSyncAndRefresh = () => performAction(async () => { await onSync(); return {ok: true, json: async () => ({message: "Synchronisation terminée"}) } });
+  const handleSyncAndRefresh = async () => {
+      await performAction(async () => {
+          const response = await fetch('/api/daily-cron?schedule=true');
+          return response;
+      });
+  }
+
   const handlePurge = () => {
     if (confirm("Voulez-vous vraiment purger les anciens emails?")) {
       performAction(() => fetch('/api/emails?action=cleanup', { method: 'POST' }));
     }
   };
+  
   const handleTestEmail = () => performAction(() => fetch('/api/emails?action=test', { method: 'POST' }));
 
   return (
@@ -1045,7 +1121,7 @@ const EmailsArchiveView: FC<{onDataRefresh: () => void, onSync: () => void, isSy
         <div className="px-6 py-5 border-b bg-slate-50/50"><h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">Emails Récemment Archivés</h3></div>
         {loading ? <div className="p-12 text-center text-slate-400">Chargement...</div> : (
         <table className="w-full text-left"><thead className="bg-slate-50 text-[10px] uppercase font-black tracking-widest text-slate-400"><tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">Destinataire</th><th className="px-6 py-4">Mission</th><th className="px-6 py-4">Sujet</th></tr></thead>
-        <tbody className="divide-y">{(emails || []).map(e => <tr key={e._id} className="text-xs hover:bg-slate-50">
+        <tbody className="divide-y">{emails.map(e => <tr key={e._id} className="text-xs hover:bg-slate-50">
             <td className="px-6 py-4 whitespace-nowrap text-slate-500">{new Date(e.sentAt).toLocaleString('fr-FR')}</td>
             <td className="px-6 py-4 font-medium">{e.to}</td>
             <td className="px-6 py-4 uppercase font-bold text-slate-400">{e.propertyId}</td>
