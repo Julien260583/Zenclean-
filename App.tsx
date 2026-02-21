@@ -10,7 +10,7 @@ const ADMIN_EMAIL = "mytoulhouse@gmail.com";
 const ADMIN_PASSWORD = "bWInnRDFbs2R7XnfEv3g";
 const LAUNDRY_COST_PER_MISSION = 14;
 
-type AppTab = 'dashboard' | 'calendar' | 'missions' | 'staff' | 'finance' | 'agent-calendar' | 'emails' | 'agent-finance';
+type AppTab = 'dashboard' | 'calendar' | 'unified-calendar' | 'missions' | 'staff' | 'finance' | 'agent-calendar' | 'emails' | 'agent-finance';
 
 const LogoComponent: FC<{ size?: 'sm' | 'lg' }> = ({ size = 'lg' }) => {
   const isLarge = size === 'lg';
@@ -278,6 +278,7 @@ const App: FC = () => {
           <nav className="space-y-2 flex-1 overflow-y-auto">
             {isAdmin && <SidebarItem id="dashboard" icon={LayoutDashboard} label="Tableau de bord" activeTab={activeTab} setActiveTab={setActiveTab} />}
             {isAdmin && <SidebarItem id="calendar" icon={CalendarIcon} label="Calendriers" activeTab={activeTab} setActiveTab={setActiveTab} />}
+            {isAdmin && <SidebarItem id="unified-calendar" icon={Calendar} label="Calendrier Unifié" activeTab={activeTab} setActiveTab={setActiveTab} />}
             {isAgent && <SidebarItem id="agent-calendar" icon={CalendarIcon} label="Mon Calendrier" activeTab={activeTab} setActiveTab={setActiveTab} />}
             <SidebarItem id="missions" icon={ClipboardCheck} label="Missions" activeTab={activeTab} setActiveTab={setActiveTab} />
             {isAgent && <SidebarItem id="agent-finance" icon={FileText} label="Mon Bilan" activeTab={activeTab} setActiveTab={setActiveTab} />}
@@ -320,6 +321,7 @@ const App: FC = () => {
           <div className="max-w-7xl mx-auto">
             {activeTab === 'dashboard' && <DashboardView missions={missions} cleaners={cleaners} onUpdateMission={handleUpdateMission} />}
             {activeTab === 'calendar' && <CalendarsTabView onSync={handleManualSync} isSyncing={isSyncing} />}
+            {activeTab === 'unified-calendar' && <UnifiedCalendarView missions={missions} />}
             {activeTab === 'agent-calendar' && isAgent && <AgentCalendarView missions={missions} currentCleaner={currentUser} onUpdateMission={handleUpdateMission} />}
             {activeTab === 'missions' && (
               <MissionsTableView 
@@ -578,6 +580,335 @@ const StatCard: FC<StatCardProps> = ({ label, value, icon: Icon, color, bg, suff
     </div>
   </div>
 );
+
+// ─── Types for iCal events from MongoDB ───────────────────────────────────────
+interface CalendarEvent {
+  _id?: string;
+  uid: string;
+  propertyId: PropertyKey;
+  summary: string;
+  description?: string;
+  startDate: string;
+  endDate?: string;
+  eventType: 'checkin' | 'checkout' | 'reservation' | 'blocked';
+  source: 'ical';
+}
+
+type UnifiedEvent = 
+  | { type: 'ical'; data: CalendarEvent }
+  | { type: 'mission'; data: Mission };
+
+// ─── Unified Calendar View ─────────────────────────────────────────────────────
+const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
+  const [activeProp, setActiveProp] = useState<PropertyKey | 'all'>('all');
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  const month = currentDate.getMonth();
+  const year = currentDate.getFullYear();
+
+  useEffect(() => {
+    loadCalendarEvents();
+  }, [month, year, activeProp]);
+
+  const loadCalendarEvents = async () => {
+    setIsLoading(true);
+    try {
+      const params = new URLSearchParams({
+        month: String(month + 1),
+        year: String(year),
+        ...(activeProp !== 'all' ? { propertyId: activeProp } : {})
+      });
+      const res = await fetch(`/api/calendar-events?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCalendarEvents(Array.isArray(data) ? data : []);
+      }
+    } catch (e) {
+      console.error("Erreur chargement événements:", e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+    setSyncStatus(null);
+    try {
+      const res = await fetch('/api/calendar-events', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setSyncStatus({ type: 'success', msg: `${data.synced} événements synchronisés` });
+        await loadCalendarEvents();
+      } else {
+        setSyncStatus({ type: 'error', msg: data.error || 'Erreur de synchronisation' });
+      }
+    } catch (e) {
+      setSyncStatus({ type: 'error', msg: 'Erreur réseau' });
+    } finally {
+      setIsSyncing(false);
+      setTimeout(() => setSyncStatus(null), 4000);
+    }
+  };
+
+  const gridDays = useMemo(() => {
+    const days: (number | null)[] = [];
+    const startDay = (new Date(year, month, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    for (let i = 0; i < startDay; i++) days.push(null);
+    for (let d = 1; d <= daysInMonth; d++) days.push(d);
+    return days;
+  }, [month, year]);
+
+  const eventsForDay = (day: number): UnifiedEvent[] => {
+    const dayStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const result: UnifiedEvent[] = [];
+
+    // iCal events
+    calendarEvents
+      .filter(e => (activeProp === 'all' || e.propertyId === activeProp) && e.startDate === dayStr)
+      .forEach(e => result.push({ type: 'ical', data: e }));
+
+    // Mission events
+    missions
+      .filter(m => m.date === dayStr && (activeProp === 'all' || m.propertyId === activeProp))
+      .forEach(m => result.push({ type: 'mission', data: m }));
+
+    return result;
+  };
+
+  const selectedDayEvents = useMemo(() => {
+    if (!selectedDay) return [];
+    const [y, mo, d] = selectedDay.split('-').map(Number);
+    return eventsForDay(d);
+  }, [selectedDay, calendarEvents, missions, activeProp]);
+
+  const EVENT_TYPE_CONFIG = {
+    checkin: { label: 'Arrivée', bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700', dot: 'bg-emerald-500' },
+    checkout: { label: 'Départ', bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-700', dot: 'bg-orange-500' },
+    reservation: { label: 'Réservation', bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-700', dot: 'bg-blue-500' },
+    blocked: { label: 'Indisponible', bg: 'bg-slate-100', border: 'border-slate-200', text: 'text-slate-600', dot: 'bg-slate-400' },
+    mission: { label: 'Ménage', bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700', dot: 'bg-purple-500' },
+  };
+
+  const getPropertyColor = (id: PropertyKey) => PROPERTIES.find(p => p.id === id)?.hexColor || '#888';
+
+  return (
+    <div className="space-y-6">
+      {/* Header Controls */}
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <h2 className="text-2xl font-black text-[#1A2D42] uppercase tracking-tight">Calendrier Unifié</h2>
+          <div className="flex items-center gap-3">
+            {syncStatus && (
+              <span className={`px-4 py-2 rounded-xl text-xs font-bold ${syncStatus.type === 'success' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                {syncStatus.msg}
+              </span>
+            )}
+            <button
+              onClick={handleSync}
+              disabled={isSyncing}
+              className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-2xl font-bold text-sm shadow-lg shadow-orange-200 transition-all disabled:opacity-50"
+            >
+              {isSyncing ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              {isSyncing ? 'Synchronisation...' : 'Sync iCal → MongoDB'}
+            </button>
+          </div>
+        </div>
+
+        {/* Property Filter Buttons */}
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setActiveProp('all')}
+            className={`px-5 py-2.5 rounded-2xl font-bold text-sm transition-all border-2 ${activeProp === 'all' ? 'bg-[#1A2D42] text-white border-[#1A2D42] shadow-lg' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+          >
+            Tous les apparts
+          </button>
+          {PROPERTIES.map(p => (
+            <button
+              key={p.id}
+              onClick={() => setActiveProp(p.id)}
+              className={`px-5 py-2.5 rounded-2xl font-bold text-sm transition-all border-2 flex items-center gap-2 ${activeProp === p.id ? 'text-white shadow-lg' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+              style={activeProp === p.id ? { backgroundColor: p.hexColor, borderColor: p.hexColor } : { borderColor: p.hexColor + '50' }}
+            >
+              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: p.hexColor }} />
+              {p.name}
+            </button>
+          ))}
+        </div>
+
+        {/* Legend */}
+        <div className="flex flex-wrap gap-3">
+          {Object.entries(EVENT_TYPE_CONFIG).map(([key, cfg]) => (
+            <div key={key} className="flex items-center gap-1.5 text-xs text-slate-500">
+              <span className={`w-2.5 h-2.5 rounded-full ${cfg.dot}`} />
+              {cfg.label}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Calendar Grid */}
+      <div className="bg-white rounded-[32px] border shadow-sm overflow-hidden">
+        {/* Month navigation */}
+        <div className="p-5 border-b bg-slate-50/50 flex justify-between items-center">
+          <h3 className="text-lg font-black text-[#1A2D42] capitalize">
+            {new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(currentDate)}
+          </h3>
+          <div className="flex items-center bg-white p-1 rounded-2xl border shadow-sm">
+            <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl transition-colors">
+              <ChevronLeft size={20} />
+            </button>
+            <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-[#1A2D42] transition-colors">
+              Aujourd'hui
+            </button>
+            <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-slate-50 rounded-xl transition-colors">
+              <ChevronRight size={20} />
+            </button>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="h-[400px] flex items-center justify-center text-slate-400">
+            <RefreshCw size={28} className="animate-spin" />
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <div className="min-w-[700px]">
+              {/* Day headers */}
+              <div className="grid grid-cols-7 border-b text-[10px] font-black uppercase tracking-widest text-slate-400 text-center">
+                {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => (
+                  <div key={d} className="py-3">{d}</div>
+                ))}
+              </div>
+              {/* Days grid */}
+              <div className="grid grid-cols-7 auto-rows-[130px]">
+                {gridDays.map((day, idx) => {
+                  if (day === null) return <div key={`empty-${idx}`} className="bg-slate-50/30 border-r border-b" />;
+                  const isToday = day === new Date().getDate() && month === new Date().getMonth() && year === new Date().getFullYear();
+                  const dayStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                  const dayEvents = eventsForDay(day);
+                  const isSelected = selectedDay === dayStr;
+
+                  return (
+                    <div
+                      key={day}
+                      onClick={() => setSelectedDay(isSelected ? null : dayStr)}
+                      className={`p-2 border-r border-b cursor-pointer transition-colors ${isToday ? 'bg-orange-50/30' : ''} ${isSelected ? 'ring-2 ring-inset ring-orange-400 bg-orange-50/20' : 'hover:bg-slate-50/50'}`}
+                    >
+                      <span className={`text-xs font-black block mb-1 ${isToday ? 'bg-orange-500 text-white w-6 h-6 flex items-center justify-center rounded-lg shadow-md shadow-orange-200' : 'text-slate-400'}`}>
+                        {day}
+                      </span>
+                      <div className="space-y-1 overflow-y-auto max-h-[90px]">
+                        {dayEvents.slice(0, 3).map((ev, i) => {
+                          if (ev.type === 'mission') {
+                            const cfg = EVENT_TYPE_CONFIG.mission;
+                            const propColor = getPropertyColor(ev.data.propertyId);
+                            return (
+                              <div key={`m-${i}`} className={`px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase flex items-center gap-1 border ${cfg.bg} ${cfg.border} ${cfg.text}`}>
+                                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: propColor }} />
+                                <span className="truncate">🧹 {ev.data.propertyId}</span>
+                              </div>
+                            );
+                          } else {
+                            const cfg = EVENT_TYPE_CONFIG[ev.data.eventType];
+                            const propColor = getPropertyColor(ev.data.propertyId);
+                            const icons: Record<string, string> = { checkin: '🟢', checkout: '🔴', reservation: '📅', blocked: '🚫' };
+                            return (
+                              <div key={`e-${i}`} className={`px-1.5 py-0.5 rounded-md text-[9px] font-black flex items-center gap-1 border ${cfg.bg} ${cfg.border} ${cfg.text}`}>
+                                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: propColor }} />
+                                <span className="truncate">{icons[ev.data.eventType]} {ev.data.summary.substring(0, 12)}</span>
+                              </div>
+                            );
+                          }
+                        })}
+                        {dayEvents.length > 3 && (
+                          <div className="text-[9px] text-slate-400 font-bold pl-1">+{dayEvents.length - 3} autres</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Day Detail Panel */}
+      {selectedDay && (
+        <div className="bg-white rounded-[32px] border shadow-sm p-6">
+          <div className="flex justify-between items-center mb-5">
+            <h3 className="font-black text-[#1A2D42] text-lg capitalize">
+              {new Date(selectedDay + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            </h3>
+            <button onClick={() => setSelectedDay(null)} className="p-2 hover:bg-slate-100 rounded-xl">
+              <X size={18} />
+            </button>
+          </div>
+          {selectedDayEvents.length === 0 ? (
+            <p className="text-slate-400 font-bold text-center py-6">Aucun événement ce jour</p>
+          ) : (
+            <div className="space-y-3">
+              {selectedDayEvents.map((ev, i) => {
+                const propColor = getPropertyColor(ev.type === 'mission' ? ev.data.propertyId : (ev.data as CalendarEvent).propertyId);
+                const propName = PROPERTIES.find(p => p.id === (ev.type === 'mission' ? ev.data.propertyId : (ev.data as CalendarEvent).propertyId))?.name;
+
+                if (ev.type === 'mission') {
+                  const m = ev.data;
+                  const cleaner = null; // would need cleaners passed in
+                  const statusLabels: Record<string, string> = {
+                    pending: '⏳ En attente', assigned: '✅ Assignée', completed: '✔ Terminée', cancelled: '❌ Annulée'
+                  };
+                  return (
+                    <div key={`dm-${i}`} className="flex items-start gap-4 p-4 rounded-2xl border border-purple-100 bg-purple-50/50">
+                      <div className="w-3 h-3 rounded-full mt-1 flex-shrink-0" style={{ backgroundColor: propColor }} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-black text-purple-700 uppercase text-sm">🧹 Mission de ménage</span>
+                          <span className="px-2 py-0.5 bg-purple-100 text-purple-600 text-xs rounded-lg font-bold">{propName}</span>
+                        </div>
+                        <p className="text-sm text-slate-600 mt-1">{statusLabels[m.status] || m.status}</p>
+                        {m.notes && <p className="text-xs text-slate-400 mt-1 italic">{m.notes}</p>}
+                        {(m.startTime || m.endTime) && (
+                          <p className="text-xs text-slate-500 mt-1">🕐 {m.startTime} — {m.endTime}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                } else {
+                  const e = ev.data as CalendarEvent;
+                  const cfg = EVENT_TYPE_CONFIG[e.eventType];
+                  const labels: Record<string, string> = { checkin: '🟢 Arrivée', checkout: '🔴 Départ', reservation: '📅 Réservation', blocked: '🚫 Indisponible' };
+                  return (
+                    <div key={`de-${i}`} className={`flex items-start gap-4 p-4 rounded-2xl border ${cfg.border} ${cfg.bg}`}>
+                      <div className="w-3 h-3 rounded-full mt-1 flex-shrink-0" style={{ backgroundColor: propColor }} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`font-black text-sm ${cfg.text}`}>{labels[e.eventType]}</span>
+                          <span className="px-2 py-0.5 bg-white/60 text-slate-600 text-xs rounded-lg font-bold border">{propName}</span>
+                        </div>
+                        <p className="text-sm text-slate-700 font-semibold mt-1">{e.summary}</p>
+                        {e.description && <p className="text-xs text-slate-400 mt-1 italic truncate">{e.description}</p>}
+                        {e.endDate && e.endDate !== e.startDate && (
+                          <p className="text-xs text-slate-500 mt-1">📅 jusqu'au {new Date(e.endDate + 'T12:00:00').toLocaleDateString('fr-FR')}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const CalendarsTabView: FC<{ onSync: () => void; isSyncing: boolean }> = ({ onSync, isSyncing }) => {
   const [activeProp, setActiveProp] = useState<PropertyKey | 'all'>('all');

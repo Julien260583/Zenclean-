@@ -23,6 +23,11 @@ const createIndexes = async (client: MongoClient) => {
     await db.collection('missions').createIndex({ date: 1 });
     console.log("Index créé sur date pour missions.");
 
+    // Index pour la collection calendar_events
+    await db.collection('calendar_events').createIndex({ propertyId: 1, startDate: 1 });
+    await db.collection('calendar_events').createIndex({ uid: 1, propertyId: 1 }, { unique: true });
+    console.log("Index créés pour calendar_events.");
+
   } catch (e) {
     console.error("Erreur lors de la création des index:", e);
   }
