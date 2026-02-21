@@ -161,10 +161,10 @@ const App: FC = () => {
     }
   };
 
-  const handleSaveCleaner = async (cleaner: Cleaner) => {
+  const handleSaveCleaner = async (cleaner: Cleaner, isNew: boolean) => {
     try {
       const response = await fetch('/api/cleaners', {
-        method: cleaner._id ? 'PUT' : 'POST',
+        method: isNew ? 'POST' : 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cleaner)
       });
@@ -172,9 +172,11 @@ const App: FC = () => {
         setEditingCleaner(null);
         await loadInitialData();
       } else {
+        alert("Erreur: Impossible d'enregistrer l'agent.");
         console.error('Failed to save cleaner on the server.');
       }
     } catch (e) {
+      alert("Erreur: Impossible d'enregistrer l'agent.");
       console.error("Failed to save cleaner:", e);
     }
   };
@@ -388,7 +390,7 @@ const SidebarItem: FC<SidebarItemProps> = ({ id, icon: Icon, label, activeTab, s
   </button>
 );
 
-interface CleanerModalProps { cleaner: Cleaner | null; onClose: () => void; onSave: (cleaner: Cleaner) => void; }
+interface CleanerModalProps { cleaner: Cleaner | null; onClose: () => void; onSave: (cleaner: Cleaner, isNew: boolean) => void; }
 const CleanerModal: FC<CleanerModalProps> = ({ cleaner, onClose, onSave }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [formData, setFormData] = useState<Partial<Cleaner>>(
@@ -466,7 +468,7 @@ const CleanerModal: FC<CleanerModalProps> = ({ cleaner, onClose, onSave }) => {
           </div>
           <div className="flex justify-end gap-3 pt-6 border-t">
             <button onClick={onClose} className="px-6 py-3 rounded-xl font-bold text-slate-400 hover:bg-slate-50">Annuler</button>
-            <button onClick={() => onSave(formData as Cleaner)} className="bg-[#1A2D42] text-white px-8 py-3 rounded-xl font-bold hover:shadow-lg transition-all flex items-center gap-2">
+            <button onClick={() => onSave(formData as Cleaner, cleaner === null)} className="bg-[#1A2D42] text-white px-8 py-3 rounded-xl font-bold hover:shadow-lg transition-all flex items-center gap-2">
               <Save size={18} /> Enregistrer
             </button>
           </div>
