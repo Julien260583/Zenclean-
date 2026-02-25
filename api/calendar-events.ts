@@ -5,25 +5,25 @@ const PROPERTIES_CONFIG = [
     id: 'naturel',
     name: 'Naturel',
     calendarId: '319da3c78547e5913af3b1fed606645b9ead9b92795482061bd440d47fc23d65@group.calendar.google.com',
-    hexColor: '#10B981'
+    hexColor: '#C8A97E'
   },
   {
     id: 'morhange',
     name: 'Morhange',
     calendarId: '4792a509f033d8033b457efd42b98865b31a67d28dde23a1284f93096942385c@group.calendar.google.com',
-    hexColor: '#3B82F6'
+    hexColor: '#7D4E2D'
   },
   {
     id: 'scandinave',
     name: 'Scandinave',
     calendarId: '4f94cd0632de6ac44b4927d9783d73faba95e7ab54b506d60f587b46eaf54119@group.calendar.google.com',
-    hexColor: '#6366F1'
+    hexColor: '#2D6A4F'
   },
   {
     id: 'spa',
     name: 'Spa',
     calendarId: '7cd6b0882eec615ff72afba17915838e642c24c06ba1a96eee824da01b40cb0b@group.calendar.google.com',
-    hexColor: '#F43F5E'
+    hexColor: '#0891B2'
   }
 ];
 

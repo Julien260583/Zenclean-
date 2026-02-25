@@ -7,32 +7,32 @@ export const PROPERTIES: Property[] = [
     name: 'Naturel',
     calendarId: '319da3c78547e5913af3b1fed606645b9ead9b92795482061bd440d47fc23d65@group.calendar.google.com',
     calendarUrl: 'https://calendar.google.com/calendar/embed?src=319da3c78547e5913af3b1fed606645b9ead9b92795482061bd440d47fc23d65%40group.calendar.google.com&ctz=Europe%2FParis',
-    color: 'bg-emerald-500',
-    hexColor: '#10B981'
+    color: 'bg-[#C8A97E]',
+    hexColor: '#C8A97E'
   },
   {
     id: 'morhange',
     name: 'Morhange',
     calendarId: '4792a509f033d8033b457efd42b98865b31a67d28dde23a1284f93096942385c@group.calendar.google.com',
     calendarUrl: 'https://calendar.google.com/calendar/embed?src=4792a509f033d8033b457efd42b98865b31a67d28dde23a1284f93096942385c%40group.calendar.google.com&ctz=Europe%2FParis',
-    color: 'bg-blue-500',
-    hexColor: '#3B82F6'
+    color: 'bg-[#7D4E2D]',
+    hexColor: '#7D4E2D'
   },
   {
     id: 'scandinave',
     name: 'Scandinave',
     calendarId: '4f94cd0632de6ac44b4927d9783d73faba95e7ab54b506d60f587b46eaf54119@group.calendar.google.com',
     calendarUrl: 'https://calendar.google.com/calendar/embed?src=4f94cd0632de6ac44b4927d9783d73faba95e7ab54b506d60f587b46eaf54119%40group.calendar.google.com&ctz=Europe%2FParis',
-    color: 'bg-indigo-500',
-    hexColor: '#6366F1'
+    color: 'bg-[#2D6A4F]',
+    hexColor: '#2D6A4F'
   },
   {
     id: 'spa',
     name: 'Spa',
     calendarId: '7cd6b0882eec615ff72afba17915838e642c24c06ba1a96eee824da01b40cb0b@group.calendar.google.com',
     calendarUrl: 'https://calendar.google.com/calendar/embed?src=7cd6b0882eec615ff72afba17915838e642c24c06ba1a96eee824da01b40cb0b%40group.calendar.google.com&ctz=Europe%2FParis',
-    color: 'bg-rose-500',
-    hexColor: '#F43F5E'
+    color: 'bg-cyan-600',
+    hexColor: '#0891B2'
   }
 ];
 
