@@ -107,16 +107,15 @@ export default async function handler(req: any, res: any) {
                     const newNote = dataToUpdate.notes || '';
                     const ADMIN_EMAIL = "mytoulhouse@gmail.com";
 
+                    const emailsCol = db.collection('emails');
+
                     if (noteUpdatedBy === 'admin') {
                         // Admin edited a note → notify assigned agent(s)
                         if (currentMission.cleanerId) {
                             const agent = await cleanersCol.findOne({ $or: [{ id: currentMission.cleanerId }, { _id: currentMission.cleanerId }] });
                             if (agent?.email) {
-                                try {
-                                    await sendEmail(
-                                        agent.email,
-                                        `[Note mise à jour] Mission ${property} - ${date}`,
-                                        `<p>Bonjour ${agent.name},</p>
+                                const subject = `[Note mise à jour] Mission ${property} - ${date}`;
+                                const html = `<p>Bonjour ${agent.name},</p>
                                         <p>L'administrateur a ajouté ou modifié une note sur votre mission :</p>
                                         <ul>
                                           <li><strong>Propriété :</strong> ${property}</li>
@@ -125,8 +124,12 @@ export default async function handler(req: any, res: any) {
                                         <blockquote style="border-left:4px solid #f97316;padding:8px 16px;background:#fff7ed;margin:12px 0;border-radius:4px;">
                                           ${newNote.replace(/\n/g, '<br>')}
                                         </blockquote>
-                                        <p>Merci de bien en prendre connaissance avant votre intervention.</p>`
-                                    );
+                                        <p>Merci de bien en prendre connaissance avant votre intervention.</p>`;
+                                try {
+                                    const r = await sendEmail(agent.email, subject, html);
+                                    if (r?.ok) {
+                                        await emailsCol.insertOne({ to: agent.email, subject, propertyId: currentMission.propertyId, sentAt: new Date() });
+                                    }
                                 } catch (e) {
                                     console.error('Note notification email failed (agent):', e);
                                 }
@@ -135,11 +138,8 @@ export default async function handler(req: any, res: any) {
                     } else {
                         // Agent edited a note → notify admin
                         const agentName = noteUpdatedBy || 'Un agent';
-                        try {
-                            await sendEmail(
-                                ADMIN_EMAIL,
-                                `[Note ajoutée/modifiée] Mission ${property} - ${date}`,
-                                `<p>Bonjour,</p>
+                        const subject = `[Note ajoutée/modifiée] Mission ${property} - ${date}`;
+                        const html = `<p>Bonjour,</p>
                                 <p><strong>${agentName}</strong> a ajouté ou modifié une note sur la mission :</p>
                                 <ul>
                                   <li><strong>Propriété :</strong> ${property}</li>
@@ -147,8 +147,12 @@ export default async function handler(req: any, res: any) {
                                 </ul>
                                 <blockquote style="border-left:4px solid #3b82f6;padding:8px 16px;background:#eff6ff;margin:12px 0;border-radius:4px;">
                                   ${newNote.replace(/\n/g, '<br>')}
-                                </blockquote>`
-                            );
+                                </blockquote>`;
+                        try {
+                            const r = await sendEmail(ADMIN_EMAIL, subject, html);
+                            if (r?.ok) {
+                                await emailsCol.insertOne({ to: ADMIN_EMAIL, subject, propertyId: currentMission.propertyId, sentAt: new Date() });
+                            }
                         } catch (e) {
                             console.error('Note notification email failed (admin):', e);
                         }
