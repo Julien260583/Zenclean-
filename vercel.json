@@ -6,10 +6,10 @@
     }
   ],
   "functions": {
-    "api/daily-cron.ts":    { "maxDuration": 60 },
+    "api/daily-cron.ts":      { "maxDuration": 60 },
     "api/calendar-events.ts": { "maxDuration": 30 },
-    "api/missions.ts":      { "maxDuration": 15 },
-    "api/cleaners.ts":      { "maxDuration": 15 },
-    "api/emails.ts":        { "maxDuration": 15 }
+    "api/missions.ts":        { "maxDuration": 15 },
+    "api/cleaners.ts":        { "maxDuration": 10 },
+    "api/emails.ts":          { "maxDuration": 10 }
   }
 }

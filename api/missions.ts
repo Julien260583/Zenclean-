@@ -10,9 +10,18 @@ export default async function handler(req: any, res: any) {
         const missionsCol = db.collection("missions");
 
         switch (req.method) {
-            case 'GET':
-                const missions = await missionsCol.find({}).sort({ date: 1 }).toArray();
+            case 'GET': {
+                // Load missions from 90 days ago onwards to keep the query bounded.
+                // The frontend only uses recent/upcoming missions anyway.
+                const cutoff = new Date();
+                cutoff.setDate(cutoff.getDate() - 90);
+                const cutoffStr = cutoff.toISOString().split('T')[0];
+                const missions = await missionsCol
+                    .find({ date: { $gte: cutoffStr } })
+                    .sort({ date: 1 })
+                    .toArray();
                 return res.status(200).json(missions);
+            }
 
             case 'POST':
                 const newMissionData = req.body;

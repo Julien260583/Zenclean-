@@ -1,21 +1,16 @@
 
-import { VercelRequest, VercelResponse } from '@vercel/node';
-
-// Utilisation des noms de variables d'environnement corrects et cohérents
-const API_KEY = process.env.MAILJET_API_KEY;
-const SECRET_KEY = process.env.MAILJET_SECRET_KEY;
-
-if (!API_KEY || !SECRET_KEY) {
-    // Cette erreur est critique et doit empêcher le démarrage si les clés sont absentes.
-    throw new Error("Configuration Mailjet incomplète: Les variables d'environnement MAILJET_API_KEY et/ou MAILJET_SECRET_KEY sont manquantes.");
-}
-
-// Fonction centralisée et robuste pour l'envoi d'emails
+// Fonction centralisée pour l'envoi d'emails via Mailjet
 export async function sendEmail(to: string, subject: string, html: string) {
-    
+    const API_KEY = process.env.MAILJET_API_KEY;
+    const SECRET_KEY = process.env.MAILJET_SECRET_KEY;
+
+    // Lazy check — only throws when actually trying to send, not at module load time.
+    // This prevents a missing key from crashing ALL serverless functions on startup.
+    if (!API_KEY || !SECRET_KEY) {
+        throw new Error('Configuration Mailjet incomplète: MAILJET_API_KEY et/ou MAILJET_SECRET_KEY manquantes.');
+    }
     if (!to || !subject || !html) {
-        console.error("sendEmail: Paramètres manquants (destinataire, sujet, ou contenu HTML).");
-        throw new Error("Impossible d'envoyer l'email: des paramètres essentiels sont manquants.");
+        throw new Error('sendEmail: paramètres manquants (to, subject ou html).');
     }
 
     const auth = Buffer.from(`${API_KEY}:${SECRET_KEY}`).toString('base64');

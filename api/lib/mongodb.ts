@@ -1,57 +1,31 @@
-
 import { MongoClient } from 'mongodb';
 
-const uri = process.env.MONGODB_URI || "";
-const options = {};
+const uri = process.env.MONGODB_URI || '';
+if (!uri) throw new Error('Veuillez ajouter MONGODB_URI aux variables d\'environnement Vercel.');
 
-let client: MongoClient;
-let clientPromise: Promise<MongoClient>;
+// Reuse the same connection across hot-reloads (dev) AND across invocations
+// in the same Vercel function instance (prod). Without this, each cold-start
+// creates a new MongoClient and the previous one leaks — exhausting the
+// MongoDB Atlas free-tier connection limit (max 500) quickly.
+declare global { var _mongoClientPromise: Promise<MongoClient> | undefined; }
 
-if (!uri) {
-  throw new Error("Veuillez ajouter MONGODB_URI à vos variables d'environnement dans le tableau de bord Vercel.");
-}
-
-// Fonction pour créer les index
-const createIndexes = async (client: MongoClient) => {
-  try {
-    const db = client.db("zenclean");
-    // Index pour la collection email_logs
-    await db.collection('email_logs').createIndex({ dedupKey: 1 });
-    console.log("Index créé sur dedupKey pour email_logs.");
-
-    // Index pour la collection missions
-    await db.collection('missions').createIndex({ date: 1 });
-    console.log("Index créé sur date pour missions.");
-
-    // Index pour la collection calendar_events
-    await db.collection('calendar_events').createIndex({ propertyId: 1, startDate: 1 });
-    await db.collection('calendar_events').createIndex({ uid: 1, propertyId: 1 }, { unique: true });
-    console.log("Index créés pour calendar_events.");
-
-  } catch (e) {
-    console.error("Erreur lors de la création des index:", e);
-  }
-};
-
-if (process.env.NODE_ENV === 'development') {
-  let globalWithMongo = globalThis as typeof globalThis & {
-    _mongoClientPromise?: Promise<MongoClient>;
-  };
-
-  if (!globalWithMongo._mongoClientPromise) {
-    client = new MongoClient(uri, options);
-    globalWithMongo._mongoClientPromise = client.connect().then(client => {
-      createIndexes(client);
-      return client;
-    });
-  }
-  clientPromise = globalWithMongo._mongoClientPromise;
-} else {
-  client = new MongoClient(uri, options);
-  clientPromise = client.connect().then(client => {
-    createIndexes(client);
-    return client;
+if (!globalThis._mongoClientPromise) {
+  const client = new MongoClient(uri, {
+    maxPoolSize: 5,        // keep pool small — free tier allows ~10 concurrent
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 10000,
+  });
+  globalThis._mongoClientPromise = client.connect().then(async c => {
+    // Ensure indexes exist (idempotent — safe to run on every cold start)
+    const db = c.db('zenclean');
+    await Promise.all([
+      db.collection('missions').createIndex({ date: 1 }),
+      db.collection('emails').createIndex({ dedupKey: 1 }, { unique: true, sparse: true }),
+      db.collection('calendar_events').createIndex({ propertyId: 1, startDate: 1 }),
+      db.collection('calendar_events').createIndex({ uid: 1, propertyId: 1 }, { unique: true }),
+    ]).catch(() => {}); // ignore "already exists" errors
+    return c;
   });
 }
 
-export default clientPromise;
+export default globalThis._mongoClientPromise;

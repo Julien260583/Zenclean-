@@ -209,62 +209,53 @@ export default async function handler(req: any, res: any) {
       let totalDeleted = 0;
       const errors: string[] = [];
 
-      for (const prop of PROPERTIES_CONFIG) {
-        try {
-          const icalUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(prop.calendarId)}/public/basic.ics`;
-          const response = await fetch(icalUrl);
-
-          if (!response.ok) {
-            errors.push(`Impossible de récupérer le calendrier pour ${prop.name}: ${response.status}`);
-            continue;
+      // Fetch all 4 iCal feeds in parallel to stay well within the 30s timeout
+      const propResults = await Promise.all(
+        PROPERTIES_CONFIG.map(async (prop) => {
+          try {
+            const icalUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(prop.calendarId)}/public/basic.ics`;
+            const response = await fetch(icalUrl, { signal: AbortSignal.timeout(8000) });
+            if (!response.ok) {
+              errors.push(`Impossible de récupérer le calendrier pour ${prop.name}: ${response.status}`);
+              return null;
+            }
+            const icalData = await response.text();
+            const { events, cancelledUids } = parseIcalEvents(icalData, prop.id);
+            return { prop, events, cancelledUids };
+          } catch (e: any) {
+            errors.push(`Erreur pour ${prop.name}: ${e.message}`);
+            return null;
           }
+        })
+      );
 
-          const icalData = await response.text();
-          const { events, cancelledUids } = parseIcalEvents(icalData, prop.id);
+      for (const result of propResults) {
+        if (!result) continue;
+        const { prop, events, cancelledUids } = result;
 
-          // Upsert each active event by uid
-          const activeUids: string[] = [];
-          for (const event of events) {
-            await calendarEventsCol.updateOne(
-              { uid: event.uid, propertyId: event.propertyId },
-              { $set: event },
-              { upsert: true }
-            );
-            activeUids.push(event.uid);
-            totalSynced++;
-          }
-
-          // Delete events marked as CANCELLED in the iCal feed (STATUS:CANCELLED)
-          if (cancelledUids.length > 0) {
-            const cancelResult = await calendarEventsCol.deleteMany({
-              propertyId: prop.id,
-              uid: { $in: cancelledUids }
-            });
-            totalDeleted += cancelResult.deletedCount;
-          }
-
-          // Delete events that are no longer present in the iCal feed at all
-          // (they were removed/cancelled without STATUS:CANCELLED)
-          const allCurrentUids = [...activeUids, ...cancelledUids];
-          if (allCurrentUids.length > 0) {
-            const removeResult = await calendarEventsCol.deleteMany({
-              propertyId: prop.id,
-              uid: { $nin: allCurrentUids }
-            });
-            totalDeleted += removeResult.deletedCount;
-          }
-
-        } catch (e: any) {
-          errors.push(`Erreur pour ${prop.name}: ${e.message}`);
+        // Bulk-upsert all active events in one round-trip
+        if (events.length > 0) {
+          const bulkOps = events.map(event => ({
+            updateOne: {
+              filter: { uid: event.uid, propertyId: event.propertyId },
+              update: { $set: event },
+              upsert: true
+            }
+          }));
+          const bulkResult = await calendarEventsCol.bulkWrite(bulkOps, { ordered: false });
+          totalSynced += bulkResult.upsertedCount + bulkResult.modifiedCount;
         }
-      }
 
-      // Create index if not exists
-      try {
-        await calendarEventsCol.createIndex({ propertyId: 1, startDate: 1 });
-        await calendarEventsCol.createIndex({ uid: 1, propertyId: 1 }, { unique: true });
-      } catch (e) {
-        // index may already exist
+        if (cancelledUids.length > 0) {
+          const r = await calendarEventsCol.deleteMany({ propertyId: prop.id, uid: { $in: cancelledUids } });
+          totalDeleted += r.deletedCount;
+        }
+
+        const allCurrentUids = [...events.map(e => e.uid), ...cancelledUids];
+        if (allCurrentUids.length > 0) {
+          const r = await calendarEventsCol.deleteMany({ propertyId: prop.id, uid: { $nin: allCurrentUids } });
+          totalDeleted += r.deletedCount;
+        }
       }
 
       return res.status(200).json({
