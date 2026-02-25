@@ -22,13 +22,20 @@ export default async function handler(req: any, res: any) {
 
             case 'PUT':
                 const { _id: update_id, id: updateId, ...updateData } = req.body;
+
                 let filter;
 
-                if (update_id) {
-                    try {
-                        filter = { _id: new ObjectId(update_id) };
-                    } catch (e) {
-                        return res.status(400).json({ message: "L''identifiant _id fourni n''est pas un ObjectId valide."});
+                // _id can arrive as a plain 24-char hex string OR as a serialised
+                // MongoDB ObjectId object { $oid: '...' } depending on the driver version.
+                const rawId = typeof update_id === 'object' && update_id !== null
+                    ? update_id.$oid ?? String(update_id)
+                    : update_id;
+
+                if (rawId) {
+                    if (ObjectId.isValid(rawId)) {
+                        filter = { _id: new ObjectId(rawId) };
+                    } else {
+                        return res.status(400).json({ message: "L'identifiant _id fourni n'est pas un ObjectId valide." });
                     }
                 } else if (updateId) {
                     filter = { id: updateId };
@@ -39,7 +46,15 @@ export default async function handler(req: any, res: any) {
                 const updateResult = await cleanersCol.updateOne(filter, { $set: updateData });
 
                 if (updateResult.matchedCount === 0) {
-                    return res.status(404).json({ message: "Agent non trouvé pour la mise à jour." });
+                    // If no match by _id, try by custom id field as fallback
+                    if (updateId) {
+                        const fallbackResult = await cleanersCol.updateOne({ id: updateId }, { $set: updateData });
+                        if (fallbackResult.matchedCount === 0) {
+                            return res.status(404).json({ message: "Agent non trouvé pour la mise à jour." });
+                        }
+                    } else {
+                        return res.status(404).json({ message: "Agent non trouvé pour la mise à jour." });
+                    }
                 }
                 res.status(200).json({ message: "Agent mis à jour avec succès." });
                 break;

@@ -69,7 +69,7 @@ export default async function handler(req: any, res: any) {
 
             case 'PUT':
                 const missionUpdate = req.body;
-                const { _id: update_id, id: updateId, ...dataToUpdate } = missionUpdate;
+                const { _id: update_id, id: updateId, noteUpdatedBy, ...dataToUpdate } = missionUpdate;
 
                 let filter;
                 if (update_id) {
@@ -80,11 +80,72 @@ export default async function handler(req: any, res: any) {
                     return res.status(400).json({ error: 'Un identifiant de mission (_id ou id) est requis.' });
                 }
 
+                // Fetch the current mission to detect note changes
+                const currentMission = await missionsCol.findOne(filter);
+                const noteChanged = dataToUpdate.notes !== undefined && dataToUpdate.notes !== (currentMission?.notes ?? '');
+
                 const updateResult = await missionsCol.updateOne(filter, { $set: dataToUpdate });
 
                 if (updateResult.matchedCount === 0) {
                     return res.status(404).json({ error: 'Mission non trouvée.' });
                 }
+
+                // Send email notifications if the note changed
+                if (noteChanged && currentMission) {
+                    const cleanersCol = db.collection("cleaners");
+                    const property = (currentMission.propertyId || '').toUpperCase();
+                    const date = currentMission.date || '';
+                    const newNote = dataToUpdate.notes || '';
+                    const ADMIN_EMAIL = "mytoulhouse@gmail.com";
+
+                    if (noteUpdatedBy === 'admin') {
+                        // Admin edited a note → notify assigned agent(s)
+                        if (currentMission.cleanerId) {
+                            const agent = await cleanersCol.findOne({ $or: [{ id: currentMission.cleanerId }, { _id: currentMission.cleanerId }] });
+                            if (agent?.email) {
+                                try {
+                                    await sendEmail(
+                                        agent.email,
+                                        `[Note mise à jour] Mission ${property} - ${date}`,
+                                        `<p>Bonjour ${agent.name},</p>
+                                        <p>L'administrateur a ajouté ou modifié une note sur votre mission :</p>
+                                        <ul>
+                                          <li><strong>Propriété :</strong> ${property}</li>
+                                          <li><strong>Date :</strong> ${date}</li>
+                                        </ul>
+                                        <blockquote style="border-left:4px solid #f97316;padding:8px 16px;background:#fff7ed;margin:12px 0;border-radius:4px;">
+                                          ${newNote.replace(/\n/g, '<br>')}
+                                        </blockquote>
+                                        <p>Merci de bien en prendre connaissance avant votre intervention.</p>`
+                                    );
+                                } catch (e) {
+                                    console.error('Note notification email failed (agent):', e);
+                                }
+                            }
+                        }
+                    } else {
+                        // Agent edited a note → notify admin
+                        const agentName = noteUpdatedBy || 'Un agent';
+                        try {
+                            await sendEmail(
+                                ADMIN_EMAIL,
+                                `[Note ajoutée/modifiée] Mission ${property} - ${date}`,
+                                `<p>Bonjour,</p>
+                                <p><strong>${agentName}</strong> a ajouté ou modifié une note sur la mission :</p>
+                                <ul>
+                                  <li><strong>Propriété :</strong> ${property}</li>
+                                  <li><strong>Date :</strong> ${date}</li>
+                                </ul>
+                                <blockquote style="border-left:4px solid #3b82f6;padding:8px 16px;background:#eff6ff;margin:12px 0;border-radius:4px;">
+                                  ${newNote.replace(/\n/g, '<br>')}
+                                </blockquote>`
+                            );
+                        } catch (e) {
+                            console.error('Note notification email failed (admin):', e);
+                        }
+                    }
+                }
+
                 return res.status(200).json({ success: true, message: 'Mission mise à jour.' });
 
             case 'DELETE':

@@ -216,6 +216,25 @@ const App: FC = () => {
 
     } catch (e) { console.error(e); }
   };
+
+  const handleUpdateNote = async (mission: Mission, note: string) => {
+    const missionId = mission._id || mission.id;
+    const updatedMission = { ...mission, notes: note };
+    setMissions(prev => prev.map(m => ((m._id || m.id) === missionId ? updatedMission : m)));
+
+    // noteUpdatedBy: 'admin' or agent's name so the API knows who triggered it
+    const noteUpdatedBy = isAdmin
+      ? 'admin'
+      : (currentUser && currentUser !== 'admin' ? (currentUser as Cleaner).name : 'admin');
+
+    try {
+      await fetch('/api/missions', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...updatedMission, noteUpdatedBy })
+      });
+    } catch (e) { console.error(e); }
+  };
   
   const handleCreateMission = async (missionData: Partial<Mission>) => {
     const newMission: Partial<Mission> = { ...missionData, isManual: true, status: 'pending' };
@@ -367,7 +386,7 @@ const App: FC = () => {
               <textarea id="mission-note-input" className="w-full h-40 bg-slate-50 border border-slate-100 rounded-2xl p-4 focus:ring-2 focus:ring-orange-400 outline-none font-medium text-slate-700" placeholder="Ajouter des instructions particulières ici..." defaultValue={editingNoteMission.notes || ""}></textarea>
               <div className="flex justify-end gap-3 mt-6">
                 <button onClick={() => setEditingNoteMission(null)} className="px-6 py-3 rounded-xl font-bold text-slate-400 hover:bg-slate-50">Annuler</button>
-                <button onClick={() => { const note = (document.getElementById('mission-note-input') as HTMLTextAreaElement).value; handleUpdateMission({...editingNoteMission, notes: note}); setEditingNoteMission(null); }} className="bg-[#1A2D42] text-white px-8 py-3 rounded-xl font-bold hover:shadow-lg transition-all">
+                <button onClick={() => { const note = (document.getElementById('mission-note-input') as HTMLTextAreaElement).value; handleUpdateNote(editingNoteMission, note); setEditingNoteMission(null); }} className="bg-[#1A2D42] text-white px-8 py-3 rounded-xl font-bold hover:shadow-lg transition-all">
                   Enregistrer
                 </button>
               </div>
@@ -393,14 +412,19 @@ const SidebarItem: FC<SidebarItemProps> = ({ id, icon: Icon, label, activeTab, s
 interface CleanerModalProps { cleaner: Cleaner | null; onClose: () => void; onSave: (cleaner: Cleaner, isNew: boolean) => void; }
 const CleanerModal: FC<CleanerModalProps> = ({ cleaner, onClose, onSave }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Ensure all properties are present in propertyRates (fill missing ones with 0)
+  const defaultRates = PROPERTIES.reduce((acc, p) => ({ ...acc, [p.id]: 0 }), {} as Record<string, number>);
   const [formData, setFormData] = useState<Partial<Cleaner>>(
-    cleaner || {
-      id: `c${Date.now()}`,
-      name: '', email: '', password: '',
-      avatar: `https://picsum.photos/seed/${Date.now()}/100/100`,
-      assignedProperties: [],
-      propertyRates: PROPERTIES.reduce((acc, p) => ({ ...acc, [p.id]: 0 }), {})
-    }
+    cleaner
+      ? { ...cleaner, propertyRates: { ...defaultRates, ...cleaner.propertyRates } }
+      : {
+          id: `c${Date.now()}`,
+          name: '', email: '', password: '',
+          avatar: `https://picsum.photos/seed/${Date.now()}/100/100`,
+          assignedProperties: [],
+          propertyRates: defaultRates
+        }
   );
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -724,7 +748,7 @@ const TimelineView: FC<{
                       <div key={band.id} className="absolute cursor-pointer group"
                         style={{ left, top, width, height: 20, zIndex: 10 }}
                         onClick={() => onSelect(band)}
-                        title={band.label}>
+                        title={`${band.label}${hasFused ? ` · 🧹 Ménage le ${band.fusedMission!.date}` : ''}`}>
 
                         {/* Main band */}
                         <div className="absolute inset-0 rounded-full overflow-hidden flex items-center"
@@ -745,7 +769,9 @@ const TimelineView: FC<{
                             {band.label}
                           </span>
                           {hasFused && (
-                            <span className="absolute right-1 text-[9px] leading-none" style={{ color: '#fff' }}>🧹</span>
+                            <span className="absolute right-1 text-[9px] leading-none flex items-center gap-px" style={{ color: '#fff' }}>
+                              🧹 {band.fusedMission!.date.split('-').slice(1).join('/')}
+                            </span>
                           )}
                         </div>
                       </div>
@@ -1085,7 +1111,9 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                             </span>
                           )}
                           {hasFused && (
-                            <span className="text-[10px] leading-none flex-shrink-0 ml-1">🧹</span>
+                            <span className="text-[10px] leading-none flex-shrink-0 ml-1 flex items-center gap-0.5">
+                              🧹 <span className="opacity-90">{seg.band.fusedMission!.date.split('-').slice(1).join('/')}</span>
+                            </span>
                           )}
                         </div>
                       </div>
@@ -1165,11 +1193,13 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                 {selectedBand.fusedMission && (() => {
                   const m = selectedBand.fusedMission!;
                   const labels: Record<string, string> = { pending: '⏳ En attente', assigned: '✅ Assignée', completed: '✔ Terminée', cancelled: '❌ Annulée' };
+                  const missionDateFormatted = new Date(m.date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
                   return (
                     <div className="border border-violet-100 bg-violet-50/50 rounded-2xl px-4 py-3 flex items-center gap-3">
                       <span className="text-xl">🧹</span>
                       <div>
                         <p className="text-xs font-black text-violet-600 uppercase tracking-widest">Mission ménage incluse</p>
+                        <p className="text-sm font-bold text-[#1A2D42] capitalize">{missionDateFormatted}</p>
                         <p className="text-sm text-slate-600 font-medium">{labels[m.status]}{m.startTime ? ` · ${m.startTime}—${m.endTime}` : ''}</p>
                       </div>
                     </div>
@@ -1547,21 +1577,49 @@ const FinanceView: FC<FinanceViewProps> = ({ missions, cleaners }) => {
       </div>
       <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
         <div className="px-6 py-5 border-b bg-slate-50/50"><h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">Détail des paiements par agent (Mois en cours)</h3></div>
-        <table className="w-full text-left">
-          <thead className="bg-slate-50 border-b text-[10px] font-black uppercase text-slate-400">
-            <tr><th className="px-6 py-4">Agent</th><th className="px-6 py-4">Missions</th><th className="px-6 py-4">Frais Blanchisserie</th><th className="px-6 py-4 text-right">Montant dû</th></tr>
-          </thead>
-          <tbody className="divide-y text-sm">
-            {agentReports.map(r => (
-              <tr key={r.id}>
-                <td className="px-6 py-4"><div className="flex items-center gap-3"><img src={r.avatar} className="w-8 h-8 rounded-lg" alt="" /><span className="font-bold">{r.name}</span></div></td>
-                <td className="px-6 py-4">{r.missionCount}</td>
-                <td className="px-6 py-4 text-slate-400 font-bold">-{r.missionCount * LAUNDRY_COST_PER_MISSION} €</td>
-                <td className="px-6 py-4 text-right font-black text-emerald-600">{r.totalEarned} €</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {/* Desktop table */}
+        <div className="hidden sm:block overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-slate-50 border-b text-[10px] font-black uppercase text-slate-400">
+              <tr><th className="px-6 py-4">Agent</th><th className="px-6 py-4">Missions</th><th className="px-6 py-4">Frais Blanchisserie</th><th className="px-6 py-4 text-right">Montant dû</th></tr>
+            </thead>
+            <tbody className="divide-y text-sm">
+              {agentReports.map(r => (
+                <tr key={r.id}>
+                  <td className="px-6 py-4"><div className="flex items-center gap-3"><img src={r.avatar} className="w-8 h-8 rounded-lg" alt="" /><span className="font-bold">{r.name}</span></div></td>
+                  <td className="px-6 py-4">{r.missionCount}</td>
+                  <td className="px-6 py-4 text-slate-400 font-bold">-{r.missionCount * LAUNDRY_COST_PER_MISSION} €</td>
+                  <td className="px-6 py-4 text-right font-black text-emerald-600">{r.totalEarned} €</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* Mobile cards */}
+        <div className="sm:hidden divide-y">
+          {agentReports.map(r => (
+            <div key={r.id} className="px-5 py-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <img src={r.avatar} className="w-9 h-9 rounded-xl" alt="" />
+                <span className="font-black text-[#1A2D42]">{r.name}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="bg-slate-50 rounded-2xl py-2 px-3">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-0.5">Missions</p>
+                  <p className="font-black text-slate-700 text-sm">{r.missionCount}</p>
+                </div>
+                <div className="bg-red-50 rounded-2xl py-2 px-3">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-red-400 mb-0.5">Blanchisserie</p>
+                  <p className="font-black text-red-500 text-sm">-{r.missionCount * LAUNDRY_COST_PER_MISSION} €</p>
+                </div>
+                <div className="bg-emerald-50 rounded-2xl py-2 px-3">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-emerald-500 mb-0.5">À payer</p>
+                  <p className="font-black text-emerald-600 text-sm">{r.totalEarned} €</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1689,13 +1747,39 @@ const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSyn
         <div className="px-6 py-5 border-b bg-slate-50/50"><h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">Emails Récemment Archivés</h3></div>
         {loading ? <div className="p-12 text-center text-slate-400">Chargement...</div> : (
           emails && emails.length > 0 ? (
-            <table className="w-full text-left"><thead className="bg-slate-50 text-[10px] uppercase font-black tracking-widest text-slate-400"><tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">Destinataire</th><th className="px-6 py-4">Mission</th><th className="px-6 py-4">Sujet</th></tr></thead>
-            <tbody className="divide-y">{emails.map(e => <tr key={e._id} className="text-xs hover:bg-slate-50">
-                <td className="px-6 py-4 whitespace-nowrap text-slate-500">{new Date(e.sentAt).toLocaleString('fr-FR')}</td>
-                <td className="px-6 py-4 font-medium">{e.to}</td>
-                <td className="px-6 py-4 uppercase font-bold text-slate-400">{e.propertyId}</td>
-                <td className="px-6 py-4 truncate max-w-xs text-slate-600">{e.subject}</td>
-            </tr>)}</tbody></table>
+            <>
+              {/* Desktop table */}
+              <div className="hidden sm:block overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-[10px] uppercase font-black tracking-widest text-slate-400">
+                    <tr><th className="px-6 py-4">Date</th><th className="px-6 py-4">Destinataire</th><th className="px-6 py-4">Mission</th><th className="px-6 py-4">Sujet</th></tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {emails.map(e => (
+                      <tr key={e._id} className="text-xs hover:bg-slate-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-slate-500">{new Date(e.sentAt).toLocaleString('fr-FR')}</td>
+                        <td className="px-6 py-4 font-medium">{e.to}</td>
+                        <td className="px-6 py-4 uppercase font-bold text-slate-400">{e.propertyId}</td>
+                        <td className="px-6 py-4 truncate max-w-xs text-slate-600">{e.subject}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Mobile cards */}
+              <div className="sm:hidden divide-y">
+                {emails.map(e => (
+                  <div key={e._id} className="px-5 py-4 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{new Date(e.sentAt).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                      {e.propertyId && <span className="text-[10px] font-black uppercase bg-slate-100 text-slate-500 px-2 py-0.5 rounded-lg">{e.propertyId}</span>}
+                    </div>
+                    <p className="font-bold text-slate-700 text-sm truncate">{e.to}</p>
+                    <p className="text-xs text-slate-500 leading-snug">{e.subject}</p>
+                  </div>
+                ))}
+              </div>
+            </>
           ) : (
             <div className="p-12 text-center text-slate-400">Aucun email archivé à afficher.</div>
           )

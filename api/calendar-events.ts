@@ -121,6 +121,7 @@ function parseIcalDateTime(raw: string, tzid: string | null): { date: string; ti
 
 function parseIcalEvents(icalData: string, propertyId: string) {
   const events: any[] = [];
+  const cancelledUids: string[] = [];
   const unfolded = unfoldIcal(icalData);
   const blocks = unfolded.split('BEGIN:VEVENT');
   blocks.shift();
@@ -134,8 +135,17 @@ function parseIcalEvents(icalData: string, propertyId: string) {
       const description = getProp(block, 'DESCRIPTION') || '';
       const startTzid = getTzid(block, 'DTSTART');
       const endTzid = getTzid(block, 'DTEND');
+      const status = getProp(block, 'STATUS');
 
-      if (!uid || !startRaw) continue;
+      if (!uid) continue;
+
+      // iCal standard: STATUS:CANCELLED means the event was cancelled
+      if (status === 'CANCELLED') {
+        cancelledUids.push(uid);
+        continue;
+      }
+
+      if (!startRaw) continue;
 
       const startParsed = parseIcalDateTime(startRaw, startTzid);
       const endParsed = endRaw ? parseIcalDateTime(endRaw, endTzid) : null;
@@ -184,7 +194,7 @@ function parseIcalEvents(icalData: string, propertyId: string) {
     }
   }
 
-  return events;
+  return { events, cancelledUids };
 }
 
 export default async function handler(req: any, res: any) {
@@ -196,6 +206,7 @@ export default async function handler(req: any, res: any) {
     if (req.method === 'POST') {
       // Sync all iCal feeds to MongoDB
       let totalSynced = 0;
+      let totalDeleted = 0;
       const errors: string[] = [];
 
       for (const prop of PROPERTIES_CONFIG) {
@@ -209,17 +220,40 @@ export default async function handler(req: any, res: any) {
           }
 
           const icalData = await response.text();
-          const events = parseIcalEvents(icalData, prop.id);
+          const { events, cancelledUids } = parseIcalEvents(icalData, prop.id);
 
-          // Upsert each event by uid
+          // Upsert each active event by uid
+          const activeUids: string[] = [];
           for (const event of events) {
             await calendarEventsCol.updateOne(
               { uid: event.uid, propertyId: event.propertyId },
               { $set: event },
               { upsert: true }
             );
+            activeUids.push(event.uid);
             totalSynced++;
           }
+
+          // Delete events marked as CANCELLED in the iCal feed (STATUS:CANCELLED)
+          if (cancelledUids.length > 0) {
+            const cancelResult = await calendarEventsCol.deleteMany({
+              propertyId: prop.id,
+              uid: { $in: cancelledUids }
+            });
+            totalDeleted += cancelResult.deletedCount;
+          }
+
+          // Delete events that are no longer present in the iCal feed at all
+          // (they were removed/cancelled without STATUS:CANCELLED)
+          const allCurrentUids = [...activeUids, ...cancelledUids];
+          if (allCurrentUids.length > 0) {
+            const removeResult = await calendarEventsCol.deleteMany({
+              propertyId: prop.id,
+              uid: { $nin: allCurrentUids }
+            });
+            totalDeleted += removeResult.deletedCount;
+          }
+
         } catch (e: any) {
           errors.push(`Erreur pour ${prop.name}: ${e.message}`);
         }
@@ -236,6 +270,7 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({
         success: true,
         synced: totalSynced,
+        deleted: totalDeleted,
         errors
       });
     }
