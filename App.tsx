@@ -226,7 +226,7 @@ const App: FC = () => {
       await fetch('/api/missions', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mission)
+        body: JSON.stringify({ ...mission, isAdmin })
       });
 
     } catch (e) { console.error(e); }
@@ -1298,9 +1298,9 @@ const AgentCalendarView: FC<{ missions: Mission[]; currentCleaner: Cleaner; onUp
                       <div className={`w-2.5 h-10 rounded-lg flex-shrink-0 ${prop?.color}`} />
                       <div className="flex-grow">
                         <p className="font-black text-sm uppercase text-slate-800">{m.propertyId}</p>
-                        <p className={`text-xs font-bold ${isMine ? 'text-slate-500' : 'text-orange-600'}`}>{isMine ? "Mission assignée" : "Disponible"}</p>
+                        <p className={`text-xs font-bold ${isMine ? 'text-slate-500' : 'text-orange-600'}`}>{isMine ? "Mission assignée" : m.cleanerId ? "Déjà assignée" : "Disponible"}</p>
                       </div>
-                      {!isMine && (
+                      {!isMine && !m.cleanerId && (
                         <button
                           onClick={() => onUpdateMission({ ...m, cleanerId: currentCleaner.id, status: 'assigned' })}
                           className="bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-xs shadow-sm whitespace-nowrap"

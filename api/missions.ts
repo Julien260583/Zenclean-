@@ -84,7 +84,7 @@ export default async function handler(req: any, res: any) {
 
             case 'PUT':
                 const missionUpdate = req.body;
-                const { _id: update_id, id: updateId, noteUpdatedBy, ...dataToUpdate } = missionUpdate;
+                const { _id: update_id, id: updateId, noteUpdatedBy, isAdmin: callerIsAdmin, ...dataToUpdate } = missionUpdate;
 
                 let filter;
                 if (update_id) {
@@ -95,8 +95,16 @@ export default async function handler(req: any, res: any) {
                     return res.status(400).json({ error: 'Un identifiant de mission (_id ou id) est requis.' });
                 }
 
-                // Fetch the current mission to detect note changes
+                // Fetch the current mission to detect note changes and protect assignation
                 const currentMission = await missionsCol.findOne(filter);
+
+                // Protection assignation : seul l'admin peut retirer ou remplacer un agent déjà assigné
+                if (!callerIsAdmin && currentMission?.cleanerId) {
+                    // L'agent ne peut pas modifier cleanerId si quelqu'un est déjà assigné
+                    delete dataToUpdate.cleanerId;
+                    delete dataToUpdate.status;
+                }
+
                 const noteChanged = dataToUpdate.notes !== undefined && dataToUpdate.notes !== (currentMission?.notes ?? '');
 
                 const updateResult = await missionsCol.updateOne(filter, { $set: dataToUpdate });

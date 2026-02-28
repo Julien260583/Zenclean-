@@ -73,7 +73,8 @@ export default async function handler(req: any, res: any) {
           bulkOps.push({ insertOne: { document: m } });
           newMissionsForNotif.push(m);
         } else if (existing.date !== date) {
-          bulkOps.push({ updateOne: { filter: { id: missionId }, update: { $set: { date, notified: false } } } });
+          // Ne jamais écraser cleanerId/status lors d'un changement de date
+          bulkOps.push({ updateOne: { filter: { id: missionId }, update: { $set: { date, notified: false }, $unset: {} } } });
         }
       }
     }
