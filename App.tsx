@@ -552,10 +552,10 @@ const MissionCreatorModal: FC<MissionCreatorModalProps> = ({ onClose, onSave }) 
 interface DashboardViewProps { missions: Mission[]; cleaners: Cleaner[]; onUpdateMission: (mission: Mission) => void; }
 const DashboardView: FC<DashboardViewProps> = ({ missions, cleaners, onUpdateMission }) => {
   const { priorityMissions, stats } = useMemo(() => {
-    const today = new Date(); today.setHours(0,0,0,0);
-    const todayStr = today.toISOString().split('T')[0];
-    const sevenDaysLater = new Date(); sevenDaysLater.setDate(today.getDate() + 7);
-    const sevenDaysLaterStr = sevenDaysLater.toISOString().split('T')[0];
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    const sevenDaysLater = new Date(now); sevenDaysLater.setDate(now.getDate() + 7);
+    const sevenDaysLaterStr = `${sevenDaysLater.getFullYear()}-${String(sevenDaysLater.getMonth()+1).padStart(2,'0')}-${String(sevenDaysLater.getDate()).padStart(2,'0')}`;
 
     const filtered = missions.filter(m => (m.status === 'pending' || (m.date >= todayStr && m.date <= sevenDaysLaterStr && m.status !== 'completed')))
                              .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -563,7 +563,7 @@ const DashboardView: FC<DashboardViewProps> = ({ missions, cleaners, onUpdateMis
       priorityMissions: filtered,
       stats: {
         pending: missions.filter(m => m.status === 'pending').length,
-        today: missions.filter(m => m.date === todayStr).length,
+        today: missions.filter(m => m.date === todayStr && m.status !== 'completed').length,
         completed: missions.filter(m => m.status === 'completed').length,
         agents: cleaners.length
       }
