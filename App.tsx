@@ -1367,13 +1367,20 @@ interface MissionsTableProps {
 
 const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin, isAgent, currentCleaner, onUpdateMission, onEditNote, onSync, isSyncing, onCreateMission, onDeleteMission }) => {
   const [activePicker, setActivePicker] = useState<string | null>(null);
+  const [showPast, setShowPast] = useState(false);
+
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
   const filteredMissions = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     let base = missions;
-    if (isAgent && currentCleaner) {
+    if (isAdmin) {
+      if (!showPast) {
+        base = missions.filter(m => m.date >= todayStr);
+      }
+    } else if (isAgent && currentCleaner) {
       base = missions.filter(m => {
         const isMyMission = m.cleanerId === currentCleaner.id || (!m.cleanerId && currentCleaner.assignedProperties.includes(m.propertyId));
         if (m.status === 'completed' && new Date(m.date) < today) {
@@ -1383,12 +1390,28 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
       });
     }
     return [...base].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  }, [missions, isAgent, currentCleaner]);
+  }, [missions, isAdmin, isAgent, currentCleaner, showPast, todayStr]);
+
+  const pastCount = useMemo(() => {
+    if (!isAdmin) return 0;
+    return missions.filter(m => m.date < todayStr).length;
+  }, [missions, isAdmin, todayStr]);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col items-start gap-4 md:flex-row md:items-center md:justify-between">
-        <h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">{isAdmin ? "Toutes les missions" : "Missions disponibles & assignées"}</h3>
+        <div className="flex items-center gap-3">
+          <h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">{isAdmin ? "Missions" : "Missions disponibles & assignées"}</h3>
+          {isAdmin && (
+            <button
+              onClick={() => setShowPast(v => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs transition-all border ${showPast ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}
+            >
+              {showPast ? <Eye size={13}/> : <Eye size={13}/>}
+              {showPast ? `Masquer les passées` : `Missions passées${pastCount > 0 ? ` (${pastCount})` : ''}`}
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {isAdmin ? (
             <>
@@ -1424,7 +1447,7 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
               const isMyMission = isAgent && m.cleanerId === currentCleaner?.id;
 
               return (
-              <tr key={missionId} className="hover:bg-slate-50/50 transition-colors">
+              <tr key={missionId} className={`hover:bg-slate-50/50 transition-colors ${m.date < todayStr ? 'opacity-50' : ''}`}>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="flex items-center gap-2">
                     <div className={`w-2.5 h-2.5 rounded-full ${PROPERTIES.find(p => p.id === m.propertyId)?.color}`} />
