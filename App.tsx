@@ -14,6 +14,13 @@ const formatDate = (dateStr: string): string => {
   return `${d}/${m}/${y}`;
 };
 
+// Retourne le jour de la semaine en français (ex: "Lundi")
+const formatDayOfWeek = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const date = new Date(dateStr + 'T12:00:00');
+  return date.toLocaleDateString('fr-FR', { weekday: 'long' }).replace(/^\w/, c => c.toUpperCase());
+};
+
 const ADMIN_EMAIL = "mytoulouse@gmail.com";
 const ADMIN_PASSWORD = "bWInnRDFbs2R7XnfEv3g";
 const LAUNDRY_COST_PER_MISSION = 14;
@@ -1456,7 +1463,10 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
                     {m.notes && <div className="group relative"><StickyNote size={14} className="text-orange-500 cursor-help" /><div className="absolute left-0 bottom-full mb-2 hidden group-hover:block bg-slate-800 text-white text-[10px] p-2 rounded-lg w-48 shadow-xl z-50">{m.notes}</div></div>}
                   </div>
                 </td>
-                <td className="px-6 py-4 font-medium text-slate-600 whitespace-nowrap">{formatDate(m.date)}</td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <span className="font-medium text-slate-600">{formatDate(m.date)}</span>
+                  <span className="block text-xs text-slate-400 font-medium">{formatDayOfWeek(m.date)}</span>
+                </td>
                 <td className="px-6 py-4 relative whitespace-nowrap">
                   {isAdmin ? (
                     <div className="flex items-center gap-2">
