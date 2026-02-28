@@ -158,8 +158,20 @@ export default async function handler(req: any, res: any) {
 
     // ── 4. Email notifications (scheduled run only) ──
     if (isScheduledRun) {
-      // Charge uniquement les dedupKeys pertinentes (missions à venir) au lieu de toute la collection
-      const upcomingMissions = await missionsCol.find({ date: { $gte: todayStr } }).toArray();
+      // ── Un seul find pour toutes les missions nécessaires aux notifications ──
+      // On recharge depuis la base pour avoir l'état après le bulkWrite ci-dessus
+      const allMissionsForNotif = await missionsCol.find(
+        {}, { projection: { id: 1, propertyId: 1, date: 1, status: 1, cleanerId: 1 } }
+      ).toArray();
+
+      const in7 = new Date(todayStr + 'T12:00:00'); // heure Paris pour éviter décalage DST
+      in7.setDate(in7.getDate() + 7);
+      const in7Str = `${in7.getFullYear()}-${String(in7.getMonth()+1).padStart(2,'0')}-${String(in7.getDate()).padStart(2,'0')}`;
+
+      const upcomingMissions  = allMissionsForNotif.filter(m => m.date >= todayStr);
+      const overdueMissions   = allMissionsForNotif.filter(m => m.date < todayStr && m.status !== 'completed');
+
+      // Charge uniquement les dedupKeys pertinentes (missions à venir)
       const relevantKeys = upcomingMissions.flatMap(m =>
         allCleaners
           .filter(c => c.assignedProperties?.includes(m.propertyId))
@@ -174,6 +186,7 @@ export default async function handler(req: any, res: any) {
 
       const emailJobs: any[] = [];
 
+      // Nouvelles missions
       for (const m of upcomingMissions) {
         for (const agent of allCleaners.filter(c => c.assignedProperties?.includes(m.propertyId))) {
           const key = `new-mission-${m.id}-${agent.id}`;
@@ -184,12 +197,8 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      // Reminders & alerts
-      const in7 = new Date(); in7.setDate(in7.getDate() + 7);
-      const in7Str = in7.toISOString().split('T')[0];
-      const upcoming = await missionsCol.find({ status: { $in: ['pending', 'assigned'] }, date: { $gte: todayStr } }).toArray();
-
-      for (const m of upcoming) {
+      // Rappels & alertes (utilise upcomingMissions déjà en mémoire)
+      for (const m of upcomingMissions) {
         if (m.date === todayStr && m.status === 'assigned' && m.cleanerId) {
           const cleaner = allCleaners.find(c => c.id === m.cleanerId);
           if (cleaner?.email) {
@@ -211,8 +220,8 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      // Overdue missions
-      for (const m of await missionsCol.find({ status: { $ne: 'completed' }, date: { $lt: todayStr } }).toArray()) {
+      // Missions en retard (utilise overdueMissions déjà en mémoire)
+      for (const m of overdueMissions) {
         const key = `overdue-alert-${m.id}`;
         if (!sentKeys.has(key)) {
           emailJobs.push({ to: ADMIN_EMAIL, subject: `[ALERTE RETARD] Mission non traitée : ${m.propertyId.toUpperCase()}`, html: `<p>Mission du <strong>${formatDate(m.date)}</strong> pour <strong>${m.propertyId.toUpperCase()}</strong> en retard. Statut : ${m.status}.</p>`, propertyId: m.propertyId, key });
