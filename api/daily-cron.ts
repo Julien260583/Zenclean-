@@ -26,23 +26,40 @@ export default async function handler(req: any, res: any) {
     const cleanersCol = db.collection("cleaners");
     const emailsCol   = db.collection("emails");
 
-    // ── 1. Fetch all 4 iCal feeds in parallel with 8s timeout ──
+    // ── 1. Fetch all 4 iCal feeds in parallel with 12s timeout ──
     const calendarData = await Promise.all(
       PROPERTIES_CONFIG.map(async (prop) => {
         try {
           const url = `https://calendar.google.com/calendar/ical/${encodeURIComponent(prop.calendarId)}/public/basic.ics`;
-          const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-          if (!res.ok) return { prop, events: [] };
+          const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+          if (!res.ok) {
+            console.warn(`[iCal] ${prop.id} : réponse HTTP ${res.status} — synchro ignorée`);
+            return { prop, events: [], error: `HTTP ${res.status}` };
+          }
           const text = await res.text();
           // Unfolding iCal : les longues lignes sont repliées avec \r\n + espace/tab
           // Sans ça, les UIDs longs sont tronqués et ne matchent plus les missions en base
           const unfolded = text.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
-          return { prop, events: unfolded.split('BEGIN:VEVENT').slice(1) };
-        } catch {
-          return { prop, events: [] };
+          const events = unfolded.split('BEGIN:VEVENT').slice(1);
+          console.log(`[iCal] ${prop.id} : ${events.length} événements récupérés`);
+          return { prop, events, error: null };
+        } catch (e: any) {
+          console.warn(`[iCal] ${prop.id} : erreur fetch (${e.message}) — synchro ignorée`);
+          return { prop, events: [], error: e.message };
         }
       })
     );
+
+    // ── Sécurité : si le total des événements iCal est anormalement bas (< 2 pour
+    // toutes les propriétés confondues), on abandonne la synchro pour éviter
+    // de supprimer des missions à cause d'une réponse Google dégradée ──
+    const totalEvents = calendarData.reduce((sum, c) => sum + c.events.length, 0);
+    const propertiesOk = calendarData.filter(c => c.events.length > 0).length;
+    console.log(`[iCal] Total : ${totalEvents} événements sur ${propertiesOk}/${PROPERTIES_CONFIG.length} propriétés`);
+    if (totalEvents < 2 && propertiesOk === 0) {
+      console.error('[iCal] Aucun événement récupéré sur aucune propriété — synchro annulée par sécurité');
+      return res.status(200).json({ success: true, skipped: true, reason: 'no_ical_data' });
+    }
 
     // ── 2. Load DB data in parallel — uniquement les champs nécessaires ──
     const [allCleaners, existingMissions] = await Promise.all([
@@ -253,7 +270,10 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ 
+      success: true,
+      ical: calendarData.map(c => ({ prop: c.prop.id, events: c.events.length, error: c.error || null }))
+    });
   } catch (err: any) {
     console.error("Cron error:", err);
     return res.status(500).json({ success: false, error: err.message });

@@ -1897,10 +1897,28 @@ const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSyn
   };
 
   const handleSyncAndRefresh = async () => {
-      await performAction(async () => {
-          const response = await fetch('/api/daily-cron?schedule=true');
-          return response;
-      });
+    setIsActionRunning(true);
+    setActionStatus(null);
+    try {
+      const response = await fetch('/api/daily-cron?schedule=true');
+      const data = await response.json();
+      if (data.skipped) {
+        setActionStatus({ type: 'error', message: '⚠️ Synchro annulée : aucun événement iCal récupéré (Google inaccessible ?)' });
+      } else if (data.ical) {
+        const lines = data.ical.map((c: any) =>
+          c.error ? `${c.prop} : ⚠️ erreur` : `${c.prop} : ${c.events} événements`
+        ).join(' — ');
+        setActionStatus({ type: 'success', message: `Synchronisé — ${lines}` });
+      } else {
+        setActionStatus({ type: 'success', message: 'Synchronisation effectuée' });
+      }
+      await onSync();
+      await loadEmails();
+      setActionStatus({ type: 'error', message: 'Impossible de joindre l\'API.' });
+    } finally {
+      setIsActionRunning(false);
+      setTimeout(() => setActionStatus(null), 8000);
+    }
   }
 
   const handlePurge = () => {
