@@ -115,11 +115,25 @@ export default async function handler(req: any, res: any) {
                 // Fetch the current mission to detect note changes and protect assignation
                 const currentMission = await missionsCol.findOne(filter);
 
-                // Protection assignation : seul l'admin peut retirer ou remplacer un agent déjà assigné
-                if (!callerIsAdmin && currentMission?.cleanerId) {
-                    // L'agent ne peut pas modifier cleanerId si quelqu'un est déjà assigné
+                // Protection assignation : seul l'admin peut modifier cleanerId/status
+                if (!callerIsAdmin) {
+                    // Un agent ne peut jamais modifier cleanerId ni status si quelqu'un est déjà assigné
+                    if (currentMission?.cleanerId) {
+                        delete dataToUpdate.cleanerId;
+                        delete dataToUpdate.status;
+                    }
+                } else {
+                    // Admin : on accepte cleanerId null/vide uniquement si c'est une valeur explicitement
+                    // envoyée (retrait volontaire), mais on ne laisse jamais passer une chaîne vide
+                    if (dataToUpdate.cleanerId === '') {
+                        dataToUpdate.cleanerId = null;
+                    }
+                }
+
+                // Sécurité supplémentaire : ne jamais écraser cleanerId existant avec une valeur vide/falsy
+                // quelle que soit la source (bug frontend, requête corrompue, etc.)
+                if (!callerIsAdmin && dataToUpdate.cleanerId === '' || dataToUpdate.cleanerId === undefined) {
                     delete dataToUpdate.cleanerId;
-                    delete dataToUpdate.status;
                 }
 
                 const noteChanged = dataToUpdate.notes !== undefined && dataToUpdate.notes !== (currentMission?.notes ?? '');
