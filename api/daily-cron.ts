@@ -41,10 +41,10 @@ export default async function handler(req: any, res: any) {
       })
     );
 
-    // ── 2. Load DB data in parallel ──
+    // ── 2. Load DB data in parallel — uniquement les champs nécessaires ──
     const [allCleaners, existingMissions] = await Promise.all([
       cleanersCol.find({ email: { $exists: true, $ne: '' } }).toArray(),
-      missionsCol.find({}).toArray(),
+      missionsCol.find({}, { projection: { id: 1, calendarEventId: 1, date: 1, status: 1, cleanerId: 1, notified: 1, propertyId: 1 } }).toArray(),
     ]);
 
     const existingMap = new Map(existingMissions.map(m => [m.id, m]));

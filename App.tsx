@@ -837,7 +837,11 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
       const res = await fetch('/api/calendar-events', { method: 'POST' });
       const data = await res.json();
       if (res.ok) {
-        setSyncStatus({ type: 'success', msg: `${data.synced} événements synchronisés` });
+        const parts = [];
+        if (data.inserted > 0) parts.push(`${data.inserted} ajouté${data.inserted > 1 ? 's' : ''}`);
+        if (data.updated > 0) parts.push(`${data.updated} modifié${data.updated > 1 ? 's' : ''}`);
+        if (data.deleted > 0) parts.push(`${data.deleted} supprimé${data.deleted > 1 ? 's' : ''}`);
+        setSyncStatus({ type: 'success', msg: parts.length > 0 ? parts.join(', ') : 'Calendrier à jour' });
         await loadCalendarEvents();
       } else {
         setSyncStatus({ type: 'error', msg: data.error || 'Erreur' });
@@ -1436,7 +1440,102 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
           )}
         </div>
       </div>
-      <div className="bg-white rounded-3xl border shadow-sm overflow-x-auto">
+      {/* ── Vue cartes mobile ── */}
+      <div className="md:hidden space-y-3">
+        {filteredMissions.length === 0 && (
+          <div className="bg-white rounded-3xl border p-8 text-center text-slate-400 font-bold">Aucune mission</div>
+        )}
+        {filteredMissions.map(m => {
+          const missionId = m._id || m.id;
+          const cleaner = m.cleanerId ? cleaners.find(c => c.id === m.cleanerId) : undefined;
+          const isMyMission = isAgent && m.cleanerId === currentCleaner?.id;
+          const prop = PROPERTIES.find(p => p.id === m.propertyId);
+          return (
+            <div key={missionId} className={`bg-white rounded-2xl border shadow-sm p-4 ${m.date < todayStr ? 'opacity-50' : ''}`}>
+              {/* Ligne 1 : propriété + badges */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2.5 h-2.5 rounded-full ${prop?.color}`} />
+                  <span className="font-black text-sm uppercase tracking-tight text-slate-800">{m.propertyId}</span>
+                  {m.isManual && <MousePointer2 size={12} className="text-orange-500" />}
+                  {m.notes && <StickyNote size={14} className="text-orange-500" />}
+                </div>
+                <StatusBadge status={m.status} cleanerId={m.cleanerId} />
+              </div>
+              {/* Ligne 2 : date + jour */}
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-sm font-bold text-slate-600">{formatDate(m.date)}</span>
+                <span className="text-xs text-slate-400 font-medium">{formatDayOfWeek(m.date)}</span>
+              </div>
+              {/* Ligne 3 : agent assigné (admin) */}
+              {isAdmin && (
+                <div className="relative mb-3">
+                  <button
+                    onClick={() => setActivePicker(activePicker === missionId ? null : missionId)}
+                    className="w-full flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl"
+                  >
+                    {cleaner
+                      ? <><img src={cleaner.avatar} className="w-6 h-6 rounded-lg object-cover" alt="" /><span className="font-bold text-xs text-slate-700 flex-1 text-left">{cleaner.name}</span></>
+                      : <><UserPlus size={14} className="text-orange-500"/><span className="text-orange-500 font-black text-xs flex-1 text-left">Assigner un agent</span></>
+                    }
+                    <ChevronRight size={14} className="text-slate-300" />
+                  </button>
+                  {activePicker === missionId && (
+                    <div className="absolute left-0 right-0 top-full mt-1 bg-white border shadow-2xl rounded-2xl p-2 z-[60]">
+                      <div className="flex justify-between items-center px-2 py-1 mb-2 border-b">
+                        <span className="text-[10px] font-black text-slate-400 uppercase">Choisir l'agent</span>
+                        <button onClick={() => setActivePicker(null)} className="text-slate-300"><X size={14}/></button>
+                      </div>
+                      <button onClick={() => { onUpdateMission({...m, cleanerId: null}); setActivePicker(null); }} className="w-full flex items-center gap-3 p-2 hover:bg-red-50 text-red-500 rounded-xl text-left">
+                        <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center"><X size={16}/></div>
+                        <span className="font-bold text-xs">Retirer l'agent</span>
+                      </button>
+                      {cleaners.filter(c => c.assignedProperties.includes(m.propertyId)).map(c => (
+                        <button key={c.id} onClick={() => { onUpdateMission({...m, cleanerId: c.id}); setActivePicker(null); }} className={`w-full flex items-center gap-3 p-2 rounded-xl text-left ${m.cleanerId === c.id ? 'bg-orange-50' : 'hover:bg-slate-50'}`}>
+                          <img src={c.avatar} className="w-8 h-8 rounded-lg object-cover" alt="" />
+                          <span className={`font-bold text-xs ${m.cleanerId === c.id ? 'text-orange-600' : 'text-slate-700'}`}>{c.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!isAdmin && cleaner && (
+                <div className="flex items-center gap-2 mb-3">
+                  <img src={cleaner.avatar} className="w-6 h-6 rounded-lg object-cover" alt="" />
+                  <span className="text-xs font-bold text-slate-600">{cleaner.name}</span>
+                </div>
+              )}
+              {/* Ligne 4 : actions */}
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                {isAgent && !m.cleanerId && currentCleaner && (
+                  <button onClick={() => onUpdateMission({ ...m, cleanerId: currentCleaner.id, status: 'assigned' })} className="flex-1 bg-emerald-500 text-white py-2 rounded-xl font-bold text-xs shadow-sm">
+                    Prendre la mission
+                  </button>
+                )}
+                {(isAdmin || isMyMission) && (
+                  <button onClick={() => onUpdateMission({ ...m, status: m.status === 'completed' ? (m.cleanerId ? 'assigned' : 'pending') : 'completed' })} className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs border transition-colors ${m.status === 'completed' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                    <CheckCircle size={15} />{m.status === 'completed' ? 'Terminée' : 'Terminer'}
+                  </button>
+                )}
+                {(isAdmin || isMyMission) && (
+                  <button onClick={() => onEditNote(m)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs border bg-slate-50 text-slate-500 border-slate-200">
+                    <MessageSquare size={15} />Note
+                  </button>
+                )}
+                {isAdmin && m.isManual && (
+                  <button onClick={() => onDeleteMission(m)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs border bg-red-50 text-red-400 border-red-100">
+                    <Trash2 size={15} />
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Vue tableau desktop ── */}
+      <div className="hidden md:block bg-white rounded-3xl border shadow-sm overflow-x-auto">
         <table className="w-full text-left table-auto">
           <thead className="bg-slate-50 border-b text-[10px] font-black uppercase text-slate-400">
             <tr>

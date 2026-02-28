@@ -204,12 +204,11 @@ export default async function handler(req: any, res: any) {
     const calendarEventsCol = db.collection("calendar_events");
 
     if (req.method === 'POST') {
-      // Sync all iCal feeds to MongoDB
-      let totalSynced = 0;
+      let totalInserted = 0;
+      let totalUpdated = 0;
       let totalDeleted = 0;
       const errors: string[] = [];
 
-      // Fetch all 4 iCal feeds in parallel to stay well within the 30s timeout
       const propResults = await Promise.all(
         PROPERTIES_CONFIG.map(async (prop) => {
           try {
@@ -233,34 +232,58 @@ export default async function handler(req: any, res: any) {
         if (!result) continue;
         const { prop, events, cancelledUids } = result;
 
-        // Bulk-upsert all active events in one round-trip
-        if (events.length > 0) {
-          const bulkOps = events.map(event => ({
-            updateOne: {
-              filter: { uid: event.uid, propertyId: event.propertyId },
-              update: { $set: event },
-              upsert: true
-            }
-          }));
+        // Charge les événements existants en base pour cette propriété (uid + hash)
+        const existingDocs = await calendarEventsCol
+          .find({ propertyId: prop.id }, { projection: { uid: 1, _hash: 1 } })
+          .toArray();
+        const existingMap = new Map(existingDocs.map(d => [d.uid, d._hash]));
+        const incomingUids = new Set(events.map(e => e.uid));
+
+        const toInsert: any[] = [];
+        const toUpdate: any[] = [];
+
+        for (const event of events) {
+          // Hash léger basé sur les champs qui peuvent changer
+          const hash = `${event.startDate}|${event.endDate}|${event.summary}|${event.eventType}`;
+          if (!existingMap.has(event.uid)) {
+            toInsert.push({ ...event, _hash: hash });
+          } else if (existingMap.get(event.uid) !== hash) {
+            toUpdate.push({ ...event, _hash: hash });
+          }
+          // Si le hash est identique : rien à faire
+        }
+
+        // UIDs à supprimer : présents en base, absents de l'iCal, et non annulés explicitement
+        const allUidsToRemove = [
+          ...cancelledUids,
+          ...existingDocs
+            .filter(d => !incomingUids.has(d.uid) && !cancelledUids.includes(d.uid))
+            .map(d => d.uid)
+        ];
+
+        const bulkOps: any[] = [];
+        for (const event of toInsert) {
+          bulkOps.push({ insertOne: { document: event } });
+        }
+        for (const event of toUpdate) {
+          bulkOps.push({ updateOne: { filter: { uid: event.uid, propertyId: event.propertyId }, update: { $set: event } } });
+        }
+        if (allUidsToRemove.length > 0) {
+          bulkOps.push({ deleteMany: { filter: { propertyId: prop.id, uid: { $in: allUidsToRemove } } } });
+        }
+
+        if (bulkOps.length > 0) {
           const bulkResult = await calendarEventsCol.bulkWrite(bulkOps, { ordered: false });
-          totalSynced += bulkResult.upsertedCount + bulkResult.modifiedCount;
-        }
-
-        if (cancelledUids.length > 0) {
-          const r = await calendarEventsCol.deleteMany({ propertyId: prop.id, uid: { $in: cancelledUids } });
-          totalDeleted += r.deletedCount;
-        }
-
-        const allCurrentUids = [...events.map(e => e.uid), ...cancelledUids];
-        if (allCurrentUids.length > 0) {
-          const r = await calendarEventsCol.deleteMany({ propertyId: prop.id, uid: { $nin: allCurrentUids } });
-          totalDeleted += r.deletedCount;
+          totalInserted += bulkResult.insertedCount;
+          totalUpdated += bulkResult.modifiedCount;
+          totalDeleted += bulkResult.deletedCount;
         }
       }
 
       return res.status(200).json({
         success: true,
-        synced: totalSynced,
+        inserted: totalInserted,
+        updated: totalUpdated,
         deleted: totalDeleted,
         errors
       });
