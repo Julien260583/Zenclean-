@@ -3,6 +3,8 @@ import clientPromise from './lib/mongodb.js';
 import { ObjectId } from 'mongodb';
 import { sendEmail } from './lib/email.js';
 
+const formatDate = (d: string) => d ? d.split('-').reverse().join('/') : '';
+
 export default async function handler(req: any, res: any) {
     try {
         const client = await clientPromise;
@@ -43,8 +45,8 @@ export default async function handler(req: any, res: any) {
                             const dedupKey = `new-mission-${createdMission.id || createdMission._id}-${agent.id}`;
                             emailJobs.push({
                                 to: agent.email,
-                                subject: `[NOUVEAU] Mission manuelle : ${createdMission.propertyId.toUpperCase()} (${createdMission.date})`,
-                                html: `<p>Bonjour ${agent.name}, une nouvelle mission manuelle vient d'être ajoutée pour ${createdMission.propertyId.toUpperCase()} le ${createdMission.date}.</p>`,
+                                subject: `[NOUVEAU] Mission manuelle : ${createdMission.propertyId.toUpperCase()} (${formatDate(createdMission.date)})`,
+                                html: `<p>Bonjour ${agent.name}, une nouvelle mission manuelle vient d'être ajoutée pour ${createdMission.propertyId.toUpperCase()} le ${formatDate(createdMission.date)}.</p>`,
                                 propertyId: createdMission.propertyId,
                                 dedupKey: dedupKey
                             });
@@ -104,8 +106,9 @@ export default async function handler(req: any, res: any) {
                     const cleanersCol = db.collection("cleaners");
                     const property = (currentMission.propertyId || '').toUpperCase();
                     const date = currentMission.date || '';
+                    const displayDate = formatDate(date);
                     const newNote = dataToUpdate.notes || '';
-                    const ADMIN_EMAIL = "mytoulhouse@gmail.com";
+                    const ADMIN_EMAIL = "mytoulouse@gmail.com";
 
                     const emailsCol = db.collection('emails');
 
@@ -114,12 +117,12 @@ export default async function handler(req: any, res: any) {
                         if (currentMission.cleanerId) {
                             const agent = await cleanersCol.findOne({ $or: [{ id: currentMission.cleanerId }, { _id: currentMission.cleanerId }] });
                             if (agent?.email) {
-                                const subject = `[Note mise à jour] Mission ${property} - ${date}`;
+                                const subject = `[Note mise à jour] Mission ${property} - ${displayDate}`;
                                 const html = `<p>Bonjour ${agent.name},</p>
                                         <p>L'administrateur a ajouté ou modifié une note sur votre mission :</p>
                                         <ul>
                                           <li><strong>Propriété :</strong> ${property}</li>
-                                          <li><strong>Date :</strong> ${date}</li>
+                                          <li><strong>Date :</strong> ${displayDate}</li>
                                         </ul>
                                         <blockquote style="border-left:4px solid #f97316;padding:8px 16px;background:#fff7ed;margin:12px 0;border-radius:4px;">
                                           ${newNote.replace(/\n/g, '<br>')}
@@ -138,12 +141,12 @@ export default async function handler(req: any, res: any) {
                     } else {
                         // Agent edited a note → notify admin
                         const agentName = noteUpdatedBy || 'Un agent';
-                        const subject = `[Note ajoutée/modifiée] Mission ${property} - ${date}`;
+                        const subject = `[Note ajoutée/modifiée] Mission ${property} - ${displayDate}`;
                         const html = `<p>Bonjour,</p>
                                 <p><strong>${agentName}</strong> a ajouté ou modifié une note sur la mission :</p>
                                 <ul>
                                   <li><strong>Propriété :</strong> ${property}</li>
-                                  <li><strong>Date :</strong> ${date}</li>
+                                  <li><strong>Date :</strong> ${displayDate}</li>
                                 </ul>
                                 <blockquote style="border-left:4px solid #3b82f6;padding:8px 16px;background:#eff6ff;margin:12px 0;border-radius:4px;">
                                   ${newNote.replace(/\n/g, '<br>')}

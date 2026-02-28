@@ -2,7 +2,9 @@ import clientPromise from './lib/mongodb.js';
 import { AnyBulkWriteOperation } from 'mongodb';
 import { sendEmail } from './lib/email.js';
 
-const ADMIN_EMAIL = "mytoulhouse@gmail.com";
+const ADMIN_EMAIL = "mytoulouse@gmail.com";
+
+const formatDate = (d: string) => d ? d.split('-').reverse().join('/') : '';
 const DEDUPLICATION_LOOKBACK_DAYS = 10;
 
 const PROPERTIES_CONFIG = [
@@ -99,7 +101,7 @@ export default async function handler(req: any, res: any) {
         for (const agent of allCleaners.filter(c => c.assignedProperties?.includes(m.propertyId))) {
           const key = `new-mission-${m.id}-${agent.id}`;
           if (!sentKeys.has(key)) {
-            emailJobs.push({ to: agent.email, subject: `[NOUVEAU] Mission : ${m.propertyId.toUpperCase()} (${m.date})`, html: `<p>Bonjour ${agent.name}, une mission est disponible pour ${m.propertyId.toUpperCase()} le ${m.date}.</p>`, propertyId: m.propertyId, key });
+            emailJobs.push({ to: agent.email, subject: `[NOUVEAU] Mission : ${m.propertyId.toUpperCase()} (${formatDate(m.date)})`, html: `<p>Bonjour ${agent.name}, une mission est disponible pour ${m.propertyId.toUpperCase()} le ${formatDate(m.date)}.</p>`, propertyId: m.propertyId, key });
             sentKeys.add(key);
           }
         }
@@ -125,7 +127,7 @@ export default async function handler(req: any, res: any) {
           for (const agent of allCleaners.filter(c => c.assignedProperties?.includes(m.propertyId))) {
             const key = `alert-j7-${m.id}-${agent.id}`;
             if (!sentKeys.has(key)) {
-              emailJobs.push({ to: agent.email, subject: `[URGENT J-7] Mission libre : ${m.propertyId.toUpperCase()}`, html: `<p>La mission du ${m.date} n'est toujours pas assignée.</p>`, propertyId: m.propertyId, key });
+              emailJobs.push({ to: agent.email, subject: `[URGENT J-7] Mission libre : ${m.propertyId.toUpperCase()}`, html: `<p>La mission du ${formatDate(m.date)} n'est toujours pas assignée.</p>`, propertyId: m.propertyId, key });
               sentKeys.add(key);
             }
           }
@@ -136,7 +138,7 @@ export default async function handler(req: any, res: any) {
       for (const m of await missionsCol.find({ status: { $ne: 'completed' }, date: { $lt: todayStr } }).toArray()) {
         const key = `overdue-alert-${m.id}`;
         if (!sentKeys.has(key)) {
-          emailJobs.push({ to: ADMIN_EMAIL, subject: `[ALERTE RETARD] Mission non traitée : ${m.propertyId.toUpperCase()}`, html: `<p>Mission du <strong>${m.date}</strong> pour <strong>${m.propertyId.toUpperCase()}</strong> en retard. Statut : ${m.status}.</p>`, propertyId: m.propertyId, key });
+          emailJobs.push({ to: ADMIN_EMAIL, subject: `[ALERTE RETARD] Mission non traitée : ${m.propertyId.toUpperCase()}`, html: `<p>Mission du <strong>${formatDate(m.date)}</strong> pour <strong>${m.propertyId.toUpperCase()}</strong> en retard. Statut : ${m.status}.</p>`, propertyId: m.propertyId, key });
           sentKeys.add(key);
         }
       }

@@ -6,7 +6,15 @@ import {
 import { PROPERTIES, INITIAL_CLEANERS } from './constants';
 import { Property, Cleaner, Mission, PropertyKey } from './types';
 
-const ADMIN_EMAIL = "mytoulhouse@gmail.com";
+// Formate une date YYYY-MM-DD en JJ/MM/AAAA pour l'affichage
+const formatDate = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-');
+  if (!y || !m || !d) return dateStr;
+  return `${d}/${m}/${y}`;
+};
+
+const ADMIN_EMAIL = "mytoulouse@gmail.com";
 const ADMIN_PASSWORD = "bWInnRDFbs2R7XnfEv3g";
 const LAUNDRY_COST_PER_MISSION = 14;
 
@@ -107,8 +115,16 @@ const Login: FC<{ onLogin: (user: 'admin' | Cleaner) => void }> = ({ onLogin }) 
 };
 
 const App: FC = () => {
-  const [currentUser, setCurrentUser] = useState<'admin' | Cleaner | null>(null);
-  const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
+  const [currentUser, setCurrentUser] = useState<'admin' | Cleaner | null>(() => {
+    const saved = localStorage.getItem('zenclean_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [activeTab, setActiveTab] = useState<AppTab>(() => {
+    const savedUser = localStorage.getItem('zenclean_user');
+    if (!savedUser) return 'dashboard';
+    const user = JSON.parse(savedUser);
+    return user === 'admin' ? 'dashboard' : 'missions';
+  });
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [cleaners, setCleaners] = useState<Cleaner[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -250,7 +266,7 @@ const App: FC = () => {
 
   const handleDeleteMission = async (mission: Mission) => {
     const missionId = mission._id || mission.id;
-    if (!confirm(`Êtes-vous sûr de vouloir supprimer la mission pour ${mission.propertyId} le ${mission.date} ?`)) return;
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer la mission pour ${mission.propertyId} le ${formatDate(mission.date)} ?`)) return;
 
     try {
       const response = await fetch(`/api/missions?id=${missionId}`, { method: 'DELETE' });
@@ -268,6 +284,7 @@ const App: FC = () => {
 
   const handleLogin = (user: 'admin' | Cleaner) => {
     setCurrentUser(user);
+    localStorage.setItem('zenclean_user', JSON.stringify(user));
     setActiveTab(user === 'admin' ? 'dashboard' : 'missions');
   };
 
@@ -296,7 +313,7 @@ const App: FC = () => {
             {isAdmin && <SidebarItem id="emails" icon={Mail} label="Mails archivés" activeTab={activeTab} setActiveTab={setActiveTab} />}
           </nav>
           <div className="mt-auto pt-6 border-t">
-            <button onClick={() => { setCurrentUser(null); }} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-500 hover:bg-red-50 font-bold transition-colors">
+            <button onClick={() => { setCurrentUser(null); localStorage.removeItem('zenclean_user'); }} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-500 hover:bg-red-50 font-bold transition-colors">
               <LogOut size={20} /> <span>Déconnexion</span>
             </button>
           </div>
@@ -568,7 +585,7 @@ const DashboardView: FC<DashboardViewProps> = ({ missions, cleaners, onUpdateMis
                     <p className="font-black text-sm uppercase text-slate-800">{m.propertyId}</p>
                     {m.notes && <StickyNote size={14} className="text-orange-500 fill-orange-50" />}
                   </div>
-                  <p className="text-xs text-slate-400 font-bold">{m.date}</p>
+                  <p className="text-xs text-slate-400 font-bold">{formatDate(m.date)}</p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -739,7 +756,7 @@ const TimelineView: FC<{
                       <div key={band.id} className="absolute cursor-pointer group"
                         style={{ left, top, width, height: 20, zIndex: 10 }}
                         onClick={() => onSelect(band)}
-                        title={`${band.label}${hasFused ? ` · 🧹 Ménage le ${band.fusedMission!.date}` : ''}`}>
+                        title={`${band.label}${hasFused ? ` · 🧹 Ménage le ${formatDate(band.fusedMission!.date)}` : ''}`}>
 
                         {/* Main band */}
                         <div className="absolute inset-0 rounded-full overflow-hidden flex items-center"
@@ -761,7 +778,7 @@ const TimelineView: FC<{
                           </span>
                           {hasFused && (
                             <span className="absolute right-1 text-[9px] leading-none flex items-center gap-px" style={{ color: '#fff' }}>
-                              🧹 {band.fusedMission!.date.split('-').slice(1).join('/')}
+                              🧹 {band.fusedMission!.date.split('-').reverse().join('/')}
                             </span>
                           )}
                         </div>
@@ -1077,7 +1094,7 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                     return (
                       <div key={si}
                         onClick={() => setSelectedBand(isSelected ? null : seg.band)}
-                        title={`${seg.band.label} · ${seg.band.startDate} → ${seg.band.endDate}`}
+                        title={`${seg.band.label} · ${formatDate(seg.band.startDate)} → ${formatDate(seg.band.endDate)}`}
                         className="absolute cursor-pointer transition-all hover:opacity-90 hover:shadow-md"
                         style={{
                           left: `calc(${left}% + ${seg.isStart ? INSET : 0}px)`,
@@ -1103,7 +1120,7 @@ const UnifiedCalendarView: FC<{ missions: Mission[] }> = ({ missions }) => {
                           )}
                           {hasFused && (
                             <span className="text-[10px] leading-none flex-shrink-0 ml-1 flex items-center gap-0.5">
-                              🧹 <span className="opacity-90">{seg.band.fusedMission!.date.split('-').slice(1).join('/')}</span>
+                              🧹 <span className="opacity-90">{seg.band.fusedMission!.date.split('-').reverse().join('/')}</span>
                             </span>
                           )}
                         </div>
@@ -1350,15 +1367,12 @@ interface MissionsTableProps {
 
 const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin, isAgent, currentCleaner, onUpdateMission, onEditNote, onSync, isSyncing, onCreateMission, onDeleteMission }) => {
   const [activePicker, setActivePicker] = useState<string | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
 
   const filteredMissions = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString().split('T')[0];
 
     let base = missions;
-
     if (isAgent && currentCleaner) {
       base = missions.filter(m => {
         const isMyMission = m.cleanerId === currentCleaner.id || (!m.cleanerId && currentCleaner.assignedProperties.includes(m.propertyId));
@@ -1368,28 +1382,14 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
         return isMyMission;
       });
     }
-
-    // Pour l'admin : filtre selon l'affichage historique ou non
-    if (isAdmin && !showHistory) {
-      base = base.filter(m => m.date >= todayStr);
-    }
-
     return [...base].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  }, [missions, isAgent, currentCleaner, showHistory]);
+  }, [missions, isAgent, currentCleaner]);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col items-start gap-4 md:flex-row md:items-center md:justify-between">
-        <h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">{isAdmin ? "Missions du jour & à venir" : "Missions disponibles & assignées"}</h3>
+        <h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">{isAdmin ? "Toutes les missions" : "Missions disponibles & assignées"}</h3>
         <div className="flex items-center gap-2">
-          {isAdmin && (
-            <button
-              onClick={() => setShowHistory(h => !h)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm border transition-all ${showHistory ? 'bg-[#1A2D42] text-white border-[#1A2D42]' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
-            >
-              <Eye size={15} /> {showHistory ? 'Masquer l\'historique' : 'Voir l\'historique'}
-            </button>
-          )}
           {isAdmin ? (
             <>
               <button onClick={onSync} disabled={isSyncing} className="flex items-center gap-2 bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl font-bold text-sm shadow-sm hover:shadow-md transition-all active:scale-95 disabled:opacity-50">
@@ -1433,7 +1433,7 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
                     {m.notes && <div className="group relative"><StickyNote size={14} className="text-orange-500 cursor-help" /><div className="absolute left-0 bottom-full mb-2 hidden group-hover:block bg-slate-800 text-white text-[10px] p-2 rounded-lg w-48 shadow-xl z-50">{m.notes}</div></div>}
                   </div>
                 </td>
-                <td className="px-6 py-4 font-medium text-slate-600 whitespace-nowrap">{m.date}</td>
+                <td className="px-6 py-4 font-medium text-slate-600 whitespace-nowrap">{formatDate(m.date)}</td>
                 <td className="px-6 py-4 relative whitespace-nowrap">
                   {isAdmin ? (
                     <div className="flex items-center gap-2">
@@ -1646,7 +1646,7 @@ const AgentFinanceView: FC<{ missions: Mission[]; currentCleaner: Cleaner }> = (
     const now = new Date();
     const filename = `Mon_Bilan_MyToulHouse_${now.getMonth() + 1}_${now.getFullYear()}.csv`;
     let csvContent = "Date;Propriété;Montant (EUR)\n";
-    monthData.missions.forEach(m => { csvContent += `${m.date};${m.propertyId.toUpperCase()};${currentCleaner.propertyRates[m.propertyId] || 0}\n`; });
+    monthData.missions.forEach(m => { csvContent += `${formatDate(m.date)};${m.propertyId.toUpperCase()};${currentCleaner.propertyRates[m.propertyId] || 0}\n`; });
     csvContent += `\nTOTAL MENSUEL;;${monthData.total}\n`;
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -1672,7 +1672,7 @@ const AgentFinanceView: FC<{ missions: Mission[]; currentCleaner: Cleaner }> = (
           <tbody className="divide-y text-sm">
             {monthData.missions.map(m => (
               <tr key={m._id || m.id} className="hover:bg-slate-50/50 transition-colors">
-                <td className="px-6 py-4 font-bold text-slate-600">{m.date}</td>
+                <td className="px-6 py-4 font-bold text-slate-600">{formatDate(m.date)}</td>
                 <td className="px-6 py-4"><div className="flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${PROPERTIES.find(p => p.id === m.propertyId)?.color}`} /><span className="font-bold uppercase">{m.propertyId}</span></div></td>
                 <td className="px-6 py-4 text-right font-black text-emerald-600">{currentCleaner.propertyRates[m.propertyId] || 0} €</td>
               </tr>
