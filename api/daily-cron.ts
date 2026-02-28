@@ -79,14 +79,78 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // Delete missions whose calendar event is gone
-    const toDelete = existingMissions
-      .filter(m => m.calendarEventId && m.date >= todayStr && !currentUids.has(m.calendarEventId))
-      .map(m => m.id);
-    if (toDelete.length > 0) bulkOps.push({ deleteMany: { filter: { id: { $in: toDelete } } } });
+    // ── 3. Suppression des missions annulées (réservation disparue du calendrier) ──
+    // Protection : si aucun événement iCal n'a été récupéré (erreur réseau/timeout),
+    // on ne supprime rien pour éviter de tout effacer par erreur.
+    const calendarHasData = calendarData.some(c => c.events.length > 0);
+
+    const cancelledMissions = calendarHasData
+      ? existingMissions.filter(m =>
+          m.calendarEventId &&
+          m.date >= todayStr &&
+          !currentUids.has(m.calendarEventId) &&
+          m.status !== 'completed'
+        )
+      : [];
+
+    if (cancelledMissions.length > 0) {
+      // Envoyer un email d'annulation aux agents assignés avant suppression
+      const sentKeys = new Set<string>(
+        (await emailsCol.find({}, { projection: { dedupKey: 1 } }).toArray())
+          .map(e => e.dedupKey).filter(Boolean)
+      );
+
+      const cancellationJobs: any[] = [];
+      for (const m of cancelledMissions) {
+        if (m.cleanerId) {
+          const agent = allCleaners.find(c => c.id === m.cleanerId);
+          if (agent?.email) {
+            const key = `mission-cancelled-ical-${m.id}-${agent.id}`;
+            if (!sentKeys.has(key)) {
+              cancellationJobs.push({
+                to: agent.email,
+                subject: `[ANNULATION] Réservation annulée : ${(m.propertyId || '').toUpperCase()} - ${formatDate(m.date)}`,
+                html: `<p>Bonjour ${agent.name},</p>
+                  <p>La réservation suivante a été <strong>annulée par le client</strong>. Votre mission est donc supprimée :</p>
+                  <ul>
+                    <li><strong>Propriété :</strong> ${(m.propertyId || '').toUpperCase()}</li>
+                    <li><strong>Date prévue :</strong> ${formatDate(m.date)}</li>
+                  </ul>
+                  <p>Merci de ne plus vous déplacer pour cette intervention.</p>`,
+                propertyId: m.propertyId,
+                key
+              });
+            }
+          }
+        }
+      }
+
+      if (cancellationJobs.length > 0) {
+        const results = await Promise.all(cancellationJobs.map(async (job) => {
+          try {
+            const r = await sendEmail(job.to, job.subject, job.html);
+            return { ...job, ok: r?.ok };
+          } catch { return { ...job, ok: false }; }
+        }));
+        const sent = results.filter(r => r.ok);
+        if (sent.length > 0) {
+          await Promise.all(sent.map(j =>
+            emailsCol.updateOne(
+              { dedupKey: j.key },
+              { $setOnInsert: { to: j.to, subject: j.subject, propertyId: j.propertyId, dedupKey: j.key, sentAt: new Date() } },
+              { upsert: true }
+            )
+          ));
+        }
+      }
+
+      const toDelete = cancelledMissions.map(m => m.id);
+      bulkOps.push({ deleteMany: { filter: { id: { $in: toDelete } } } });
+    }
+
     if (bulkOps.length > 0) await missionsCol.bulkWrite(bulkOps);
 
-    // ── 3. Email notifications (scheduled run only) ──
+    // ── 4. Email notifications (scheduled run only) ──
     if (isScheduledRun) {
       // Charge TOUTES les dedupKeys déjà envoyées (pas de fenêtre temporelle limitée)
       const sentKeys = new Set<string>(

@@ -167,7 +167,7 @@ const App: FC = () => {
   const handleManualSync = useCallback(async () => {
     setIsSyncing(true);
     try {
-      await fetch('/api/daily-cron?schedule=true');
+      // Rafraîchir = simple rechargement depuis la base, sans toucher au calendrier iCal
       await loadInitialData();
     } catch (e) {
       console.error("Sync failed", e);
