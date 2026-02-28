@@ -16,7 +16,8 @@ const PROPERTIES_CONFIG = [
 
 export default async function handler(req: any, res: any) {
   const isScheduledRun = req.query.schedule === 'true';
-  const todayStr = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const todayStr = new Date(now.toLocaleString('sv-SE', { timeZone: 'Europe/Paris' })).toISOString().split('T')[0];
 
   try {
     // ── Shared connection pool (no new MongoClient) ──
