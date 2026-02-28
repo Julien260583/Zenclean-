@@ -107,16 +107,8 @@ const Login: FC<{ onLogin: (user: 'admin' | Cleaner) => void }> = ({ onLogin }) 
 };
 
 const App: FC = () => {
-  const [currentUser, setCurrentUser] = useState<'admin' | Cleaner | null>(() => {
-    const saved = localStorage.getItem('zenclean_user');
-    return saved ? JSON.parse(saved) : null;
-  });
-  const [activeTab, setActiveTab] = useState<AppTab>(() => {
-    const savedUser = localStorage.getItem('zenclean_user');
-    if (!savedUser) return 'dashboard';
-    const user = JSON.parse(savedUser);
-    return user === 'admin' ? 'dashboard' : 'missions';
-  });
+  const [currentUser, setCurrentUser] = useState<'admin' | Cleaner | null>(null);
+  const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [cleaners, setCleaners] = useState<Cleaner[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -276,7 +268,6 @@ const App: FC = () => {
 
   const handleLogin = (user: 'admin' | Cleaner) => {
     setCurrentUser(user);
-    localStorage.setItem('zenclean_user', JSON.stringify(user));
     setActiveTab(user === 'admin' ? 'dashboard' : 'missions');
   };
 
@@ -305,7 +296,7 @@ const App: FC = () => {
             {isAdmin && <SidebarItem id="emails" icon={Mail} label="Mails archivés" activeTab={activeTab} setActiveTab={setActiveTab} />}
           </nav>
           <div className="mt-auto pt-6 border-t">
-            <button onClick={() => { setCurrentUser(null); localStorage.removeItem('zenclean_user'); }} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-500 hover:bg-red-50 font-bold transition-colors">
+            <button onClick={() => { setCurrentUser(null); }} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-500 hover:bg-red-50 font-bold transition-colors">
               <LogOut size={20} /> <span>Déconnexion</span>
             </button>
           </div>
@@ -1359,12 +1350,15 @@ interface MissionsTableProps {
 
 const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin, isAgent, currentCleaner, onUpdateMission, onEditNote, onSync, isSyncing, onCreateMission, onDeleteMission }) => {
   const [activePicker, setActivePicker] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   const filteredMissions = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
 
     let base = missions;
+
     if (isAgent && currentCleaner) {
       base = missions.filter(m => {
         const isMyMission = m.cleanerId === currentCleaner.id || (!m.cleanerId && currentCleaner.assignedProperties.includes(m.propertyId));
@@ -1374,14 +1368,28 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
         return isMyMission;
       });
     }
+
+    // Pour l'admin : filtre selon l'affichage historique ou non
+    if (isAdmin && !showHistory) {
+      base = base.filter(m => m.date >= todayStr);
+    }
+
     return [...base].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  }, [missions, isAgent, currentCleaner]);
+  }, [missions, isAgent, currentCleaner, showHistory]);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col items-start gap-4 md:flex-row md:items-center md:justify-between">
-        <h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">{isAdmin ? "Toutes les missions" : "Missions disponibles & assignées"}</h3>
+        <h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">{isAdmin ? "Missions du jour & à venir" : "Missions disponibles & assignées"}</h3>
         <div className="flex items-center gap-2">
+          {isAdmin && (
+            <button
+              onClick={() => setShowHistory(h => !h)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm border transition-all ${showHistory ? 'bg-[#1A2D42] text-white border-[#1A2D42]' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+            >
+              <Eye size={15} /> {showHistory ? 'Masquer l\'historique' : 'Voir l\'historique'}
+            </button>
+          )}
           {isAdmin ? (
             <>
               <button onClick={onSync} disabled={isSyncing} className="flex items-center gap-2 bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl font-bold text-sm shadow-sm hover:shadow-md transition-all active:scale-95 disabled:opacity-50">
