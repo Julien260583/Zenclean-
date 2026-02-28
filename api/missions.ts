@@ -13,6 +13,7 @@ const todayParis = () => {
 
 // Token secret partagé uniquement côté serveur
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'mytoulouse@gmail.com';
 
 const isAdminRequest = (req: any): boolean => {
   const token = req.headers['x-admin-token'];
@@ -133,11 +134,8 @@ export default async function handler(req: any, res: any) {
                 if (noteChanged && currentMission) {
                     const cleanersCol = db.collection("cleaners");
                     const property = (currentMission.propertyId || '').toUpperCase();
-                    const date = currentMission.date || '';
-                    const displayDate = formatDate(date);
+                    const displayDate = formatDate(currentMission.date || '');
                     const newNote = dataToUpdate.notes || '';
-                    const ADMIN_EMAIL = "mytoulouse@gmail.com";
-
                     const emailsCol = db.collection('emails');
 
                     if (noteUpdatedBy === 'admin') {
@@ -187,6 +185,43 @@ export default async function handler(req: any, res: any) {
                         } catch (e) {
                             console.error('Note notification email failed (admin):', e);
                         }
+                    }
+                }
+
+                // Notification admin : mission terminée
+                const missionJustCompleted = dataToUpdate.status === 'completed' && currentMission?.status !== 'completed';
+                if (missionJustCompleted && currentMission) {
+                    try {
+                        const cleanersCol2 = db.collection("cleaners");
+                        const emailsCol2 = db.collection('emails');
+                        const property = (currentMission.propertyId || '').toUpperCase();
+                        const displayDate = formatDate(currentMission.date || '');
+                        const agent = currentMission.cleanerId
+                            ? await cleanersCol2.findOne({ $or: [{ id: currentMission.cleanerId }, { _id: currentMission.cleanerId }] })
+                            : null;
+                        const agentName = agent?.name || 'Agent inconnu';
+                        const dedupKey = `mission-completed-${updateId || update_id}`;
+                        const alreadySent = await emailsCol2.findOne({ dedupKey });
+                        if (!alreadySent) {
+                            const subject = `[TERMINÉE] Mission ${property} - ${displayDate}`;
+                            const html = `<p>Bonjour,</p>
+                                <p>La mission suivante vient d'être marquée comme <strong>terminée</strong> :</p>
+                                <ul>
+                                  <li><strong>Propriété :</strong> ${property}</li>
+                                  <li><strong>Date :</strong> ${displayDate}</li>
+                                  <li><strong>Agent :</strong> ${agentName}</li>
+                                </ul>`;
+                            const r = await sendEmail(ADMIN_EMAIL, subject, html);
+                            if (r?.ok) {
+                                await emailsCol2.updateOne(
+                                    { dedupKey },
+                                    { $setOnInsert: { to: ADMIN_EMAIL, subject, propertyId: currentMission.propertyId, dedupKey, sentAt: new Date() } },
+                                    { upsert: true }
+                                );
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Completion notification email failed:', e);
                     }
                 }
 
