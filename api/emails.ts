@@ -31,7 +31,33 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    if (action === 'cleanup') {
+    if (action === 'migrate-notified') {
+      // Migration one-shot : insère une dedupKey pour chaque mission existante
+      // afin que le cron ne les considère plus comme nouvelles à notifier.
+      try {
+        const missionsCol   = db.collection("missions");
+        const cleanersCol   = db.collection("cleaners");
+        const allMissions   = await missionsCol.find({}).toArray();
+        const allCleaners   = await cleanersCol.find({}).toArray();
+
+        let inserted = 0;
+        for (const m of allMissions) {
+          for (const agent of allCleaners.filter((c: any) => c.assignedProperties?.includes(m.propertyId))) {
+            const dedupKey = `new-mission-${m.id}-${agent.id}`;
+            const exists = await col.findOne({ dedupKey });
+            if (!exists) {
+              await col.insertOne({ to: agent.email, subject: '[MIGRATION]', propertyId: m.propertyId, dedupKey, sentAt: new Date() });
+              inserted++;
+            }
+          }
+        }
+        return res.status(200).json({ success: true, message: `${inserted} entrées de déduplication insérées.` });
+      } catch (e: any) {
+        return res.status(500).json({ error: e.message });
+      }
+    }
+
+
       try {
         const cutoff    = new Date(); cutoff.setDate(cutoff.getDate() - 30);
         const cutoffStr = cutoff.toISOString().split('T')[0];

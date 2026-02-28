@@ -69,12 +69,12 @@ export default async function handler(req: any, res: any) {
         const existing  = existingMap.get(missionId);
 
         if (!existing) {
-          const m = { id: missionId, calendarEventId: uid, propertyId: prop.id, date, status: 'pending', notes: '', isManual: false, notified: false };
+          const m = { id: missionId, calendarEventId: uid, propertyId: prop.id, date, status: 'pending', notes: '', isManual: false };
           bulkOps.push({ insertOne: { document: m } });
           newMissionsForNotif.push(m);
         } else if (existing.date !== date) {
           // Ne jamais écraser cleanerId/status lors d'un changement de date
-          bulkOps.push({ updateOne: { filter: { id: missionId }, update: { $set: { date, notified: false }, $unset: {} } } });
+          bulkOps.push({ updateOne: { filter: { id: missionId }, update: { $set: { date } } } });
         }
       }
     }
@@ -161,15 +161,17 @@ export default async function handler(req: any, res: any) {
 
       const emailJobs: any[] = [];
 
-      // Nouvelles missions : on filtre aussi sur le flag notified pour éviter
-      // les doublons si la mission existait déjà mais n'avait pas encore été notifiée
-      const missionsToNotify = await missionsCol.find({ notified: false, date: { $gte: todayStr } }).toArray();
+      // Nouvelles missions détectées dans ce run (insertées ci-dessus)
+      // + missions dont la date a changé (leur ancienne dedupKey ne correspond plus)
+      // On ne se base plus sur un flag "notified" en base (trop fragile),
+      // mais uniquement sur la présence de la dedupKey dans la collection emails.
+      const upcomingMissions = await missionsCol.find({ date: { $gte: todayStr } }).toArray();
 
-      for (const m of missionsToNotify) {
+      for (const m of upcomingMissions) {
         for (const agent of allCleaners.filter(c => c.assignedProperties?.includes(m.propertyId))) {
           const key = `new-mission-${m.id}-${agent.id}`;
           if (!sentKeys.has(key)) {
-            emailJobs.push({ to: agent.email, subject: `[NOUVEAU] Mission : ${m.propertyId.toUpperCase()} (${formatDate(m.date)})`, html: `<p>Bonjour ${agent.name}, une mission est disponible pour ${m.propertyId.toUpperCase()} le ${formatDate(m.date)}.</p>`, propertyId: m.propertyId, key, missionId: m.id });
+            emailJobs.push({ to: agent.email, subject: `[NOUVEAU] Mission : ${m.propertyId.toUpperCase()} (${formatDate(m.date)})`, html: `<p>Bonjour ${agent.name}, une mission est disponible pour ${m.propertyId.toUpperCase()} le ${formatDate(m.date)}.</p>`, propertyId: m.propertyId, key });
             sentKeys.add(key);
           }
         }
@@ -229,12 +231,6 @@ export default async function handler(req: any, res: any) {
             { upsert: true }
           )
         ));
-
-        // Marque les missions comme notifiées pour éviter tout renvoi futur
-        const notifiedMissionIds = [...new Set(sent.filter(j => j.missionId).map(j => j.missionId))];
-        if (notifiedMissionIds.length > 0) {
-          await missionsCol.updateMany({ id: { $in: notifiedMissionIds } }, { $set: { notified: true } });
-        }
       }
     }
 

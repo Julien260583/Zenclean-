@@ -1872,6 +1872,12 @@ const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSyn
   
   const handleTestEmail = () => performAction(() => fetch('/api/emails?action=test', { method: 'POST' }));
 
+  const handleMigrateNotified = () => {
+    if (confirm("Cette action marque toutes les missions existantes comme déjà notifiées pour éviter les doublons. À exécuter une seule fois. Continuer ?")) {
+      performAction(() => fetch('/api/emails?action=migrate-notified', { method: 'POST' }));
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap justify-between items-center gap-4">
@@ -1879,6 +1885,7 @@ const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSyn
         <div className="flex flex-wrap items-center gap-3">
            <button onClick={handleSyncAndRefresh} disabled={isActionRunning} className="bg-blue-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><RefreshCw className={`size-4 ${isSyncing || isActionRunning ? 'animate-spin':''}`} /> Màj & Notifs</button>
            <button onClick={handleTestEmail} disabled={isActionRunning} className="bg-slate-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><MailQuestion className={`size-4 ${isActionRunning ? 'animate-spin':''}`} /> Test Mail</button>
+           <button onClick={handleMigrateNotified} disabled={isActionRunning} className="bg-amber-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><Zap className="size-4" /> Fix doublons</button>
            <button onClick={handlePurge} disabled={isActionRunning} className="bg-red-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><Trash2 className={`size-4 ${isActionRunning ? 'animate-spin':''}`} /> Purger</button>
         </div>
       </div>
