@@ -58,6 +58,7 @@ export default async function handler(req: any, res: any) {
     }
 
 
+    if (action === 'cleanup') {
       try {
         const cutoff    = new Date(); cutoff.setDate(cutoff.getDate() - 30);
         const cutoffStr = cutoff.toISOString().split('T')[0];
