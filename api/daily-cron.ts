@@ -61,7 +61,7 @@ export default async function handler(req: any, res: any) {
         const raw  = dtEndMatch[1];
         const date = `${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`;
         const uid  = uidMatch[1].trim();
-        currentUids.add(uid);
+        currentUids.add(uid); // toujours enregistrer l'UID, même pour les événements passés
 
         if (date < todayStr) continue;
 
@@ -80,18 +80,20 @@ export default async function handler(req: any, res: any) {
     }
 
     // ── 3. Suppression des missions annulées (réservation disparue du calendrier) ──
-    // Protection : si aucun événement iCal n'a été récupéré (erreur réseau/timeout),
-    // on ne supprime rien pour éviter de tout effacer par erreur.
-    const calendarHasData = calendarData.some(c => c.events.length > 0);
+    // Protection : on ne supprime des missions que pour les propriétés dont l'iCal
+    // a effectivement retourné des données. Si l'iCal d'une propriété est vide ou en erreur,
+    // on ne touche pas à ses missions pour éviter les faux positifs.
+    const propertiesWithData = new Set(
+      calendarData.filter(c => c.events.length > 0).map(c => c.prop.id)
+    );
 
-    const cancelledMissions = calendarHasData
-      ? existingMissions.filter(m =>
-          m.calendarEventId &&
-          m.date >= todayStr &&
-          !currentUids.has(m.calendarEventId) &&
-          m.status !== 'completed'
-        )
-      : [];
+    const cancelledMissions = existingMissions.filter(m =>
+      m.calendarEventId &&
+      m.date >= todayStr &&
+      !currentUids.has(m.calendarEventId) &&
+      m.status !== 'completed' &&
+      propertiesWithData.has(m.propertyId)   // ← uniquement si l'iCal de cette propriété a répondu
+    );
 
     if (cancelledMissions.length > 0) {
       // Envoyer un email d'annulation aux agents assignés avant suppression
