@@ -34,7 +34,10 @@ export default async function handler(req: any, res: any) {
           const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
           if (!res.ok) return { prop, events: [] };
           const text = await res.text();
-          return { prop, events: text.split('BEGIN:VEVENT').slice(1) };
+          // Unfolding iCal : les longues lignes sont repliées avec \r\n + espace/tab
+          // Sans ça, les UIDs longs sont tronqués et ne matchent plus les missions en base
+          const unfolded = text.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
+          return { prop, events: unfolded.split('BEGIN:VEVENT').slice(1) };
         } catch {
           return { prop, events: [] };
         }
