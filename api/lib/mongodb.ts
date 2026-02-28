@@ -23,6 +23,7 @@ if (!globalThis._mongoClientPromise) {
 
     await Promise.all([
       db.collection('missions').createIndex({ date: 1 }),
+      db.collection('emails').createIndex({ dedupKey: 1 }, { unique: true, sparse: true }),
       db.collection('emails').createIndex({ dedupKey: 1 }, { sparse: true }),        // non-unique: note emails have no dedupKey
       db.collection('emails').createIndex({ sentAt: -1 }),                            // for fast GET sort
       db.collection('calendar_events').createIndex({ propertyId: 1, startDate: 1 }),

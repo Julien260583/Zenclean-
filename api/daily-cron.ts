@@ -69,11 +69,11 @@ export default async function handler(req: any, res: any) {
         const existing  = existingMap.get(missionId);
 
         if (!existing) {
-          const m = { id: missionId, calendarEventId: uid, propertyId: prop.id, date, status: 'pending', notes: '', isManual: false };
+          const m = { id: missionId, calendarEventId: uid, propertyId: prop.id, date, status: 'pending', notes: '', isManual: false, notified: false };
           bulkOps.push({ insertOne: { document: m } });
           newMissionsForNotif.push(m);
         } else if (existing.date !== date) {
-          bulkOps.push({ updateOne: { filter: { id: missionId }, update: { $set: { date } } } });
+          bulkOps.push({ updateOne: { filter: { id: missionId }, update: { $set: { date, notified: false } } } });
         }
       }
     }
@@ -87,21 +87,24 @@ export default async function handler(req: any, res: any) {
 
     // ── 3. Email notifications (scheduled run only) ──
     if (isScheduledRun) {
-      const lookback = new Date();
-      lookback.setDate(lookback.getDate() - DEDUPLICATION_LOOKBACK_DAYS);
+      // Charge TOUTES les dedupKeys déjà envoyées (pas de fenêtre temporelle limitée)
       const sentKeys = new Set<string>(
-        (await emailsCol.find({ sentAt: { $gte: lookback } }).project({ dedupKey: 1 }).toArray()).map(e => e.dedupKey)
+        (await emailsCol.find({}, { projection: { dedupKey: 1 } }).toArray())
+          .map(e => e.dedupKey)
+          .filter(Boolean)
       );
 
       const emailJobs: any[] = [];
 
-      // New missions
-      for (const m of newMissionsForNotif) {
-        if (m.date < todayStr) continue;
+      // Nouvelles missions : on filtre aussi sur le flag notified pour éviter
+      // les doublons si la mission existait déjà mais n'avait pas encore été notifiée
+      const missionsToNotify = await missionsCol.find({ notified: false, date: { $gte: todayStr } }).toArray();
+
+      for (const m of missionsToNotify) {
         for (const agent of allCleaners.filter(c => c.assignedProperties?.includes(m.propertyId))) {
           const key = `new-mission-${m.id}-${agent.id}`;
           if (!sentKeys.has(key)) {
-            emailJobs.push({ to: agent.email, subject: `[NOUVEAU] Mission : ${m.propertyId.toUpperCase()} (${formatDate(m.date)})`, html: `<p>Bonjour ${agent.name}, une mission est disponible pour ${m.propertyId.toUpperCase()} le ${formatDate(m.date)}.</p>`, propertyId: m.propertyId, key });
+            emailJobs.push({ to: agent.email, subject: `[NOUVEAU] Mission : ${m.propertyId.toUpperCase()} (${formatDate(m.date)})`, html: `<p>Bonjour ${agent.name}, une mission est disponible pour ${m.propertyId.toUpperCase()} le ${formatDate(m.date)}.</p>`, propertyId: m.propertyId, key, missionId: m.id });
             sentKeys.add(key);
           }
         }
@@ -153,7 +156,20 @@ export default async function handler(req: any, res: any) {
 
       const sent = results.filter(r => r.ok);
       if (sent.length > 0) {
-        await emailsCol.insertMany(sent.map(j => ({ to: j.to, subject: j.subject, propertyId: j.propertyId, dedupKey: j.key, sentAt: new Date() })));
+        // Insertion avec upsert sur dedupKey pour garantir l'unicité même en cas de race condition
+        await Promise.all(sent.map(j =>
+          emailsCol.updateOne(
+            { dedupKey: j.key },
+            { $setOnInsert: { to: j.to, subject: j.subject, propertyId: j.propertyId, dedupKey: j.key, sentAt: new Date() } },
+            { upsert: true }
+          )
+        ));
+
+        // Marque les missions comme notifiées pour éviter tout renvoi futur
+        const notifiedMissionIds = [...new Set(sent.filter(j => j.missionId).map(j => j.missionId))];
+        if (notifiedMissionIds.length > 0) {
+          await missionsCol.updateMany({ id: { $in: notifiedMissionIds } }, { $set: { notified: true } });
+        }
       }
     }
 

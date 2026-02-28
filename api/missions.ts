@@ -43,13 +43,17 @@ export default async function handler(req: any, res: any) {
                         const emailJobs = [];
                         for (const agent of eligibleAgents) {
                             const dedupKey = `new-mission-${createdMission.id || createdMission._id}-${agent.id}`;
-                            emailJobs.push({
-                                to: agent.email,
-                                subject: `[NOUVEAU] Mission manuelle : ${createdMission.propertyId.toUpperCase()} (${formatDate(createdMission.date)})`,
-                                html: `<p>Bonjour ${agent.name}, une nouvelle mission manuelle vient d'être ajoutée pour ${createdMission.propertyId.toUpperCase()} le ${formatDate(createdMission.date)}.</p>`,
-                                propertyId: createdMission.propertyId,
-                                dedupKey: dedupKey
-                            });
+                            // Vérifie si l'email a déjà été envoyé avant d'ajouter au batch
+                            const alreadySent = await emailsCol.findOne({ dedupKey });
+                            if (!alreadySent) {
+                                emailJobs.push({
+                                    to: agent.email,
+                                    subject: `[NOUVEAU] Mission manuelle : ${createdMission.propertyId.toUpperCase()} (${formatDate(createdMission.date)})`,
+                                    html: `<p>Bonjour ${agent.name}, une nouvelle mission manuelle vient d'être ajoutée pour ${createdMission.propertyId.toUpperCase()} le ${formatDate(createdMission.date)}.</p>`,
+                                    propertyId: createdMission.propertyId,
+                                    dedupKey
+                                });
+                            }
                         }
                         
                         const emailSendPromises = emailJobs.map(async (job) => {
@@ -64,14 +68,14 @@ export default async function handler(req: any, res: any) {
                         const results = await Promise.all(emailSendPromises);
                         const sentJobs = results.filter(r => r.status === 'sent');
                         if (sentJobs.length > 0) {
-                            const docsToInsert = sentJobs.map(job => ({ 
-                                to: job.to, 
-                                subject: job.subject, 
-                                propertyId: job.propertyId, 
-                                dedupKey: job.dedupKey, 
-                                sentAt: new Date() 
-                            }));
-                            await emailsCol.insertMany(docsToInsert);
+                            // upsert sur dedupKey pour garantir l'unicité
+                            await Promise.all(sentJobs.map(job =>
+                                emailsCol.updateOne(
+                                    { dedupKey: job.dedupKey },
+                                    { $setOnInsert: { to: job.to, subject: job.subject, propertyId: job.propertyId, dedupKey: job.dedupKey, sentAt: new Date() } },
+                                    { upsert: true }
+                                )
+                            ));
                         }
                     }
                 }
@@ -177,10 +181,48 @@ export default async function handler(req: any, res: any) {
                     deleteFilter = { id: deleteId };
                 }
 
+                // Récupère la mission avant suppression pour notifier l'agent assigné
+                const missionToDelete = await missionsCol.findOne(deleteFilter);
+
                 const deleteResult = await missionsCol.deleteOne(deleteFilter);
 
                 if (deleteResult.deletedCount === 0) {
                     return res.status(404).json({ error: "Mission non trouvée pour la suppression." });
+                }
+
+                // Notifie l'agent assigné si la mission avait un cleanerId
+                if (missionToDelete?.cleanerId) {
+                    try {
+                        const cleanersCol = db.collection("cleaners");
+                        const emailsCol = db.collection("emails");
+                        const agent = await cleanersCol.findOne({ $or: [{ id: missionToDelete.cleanerId }, { _id: missionToDelete.cleanerId }] });
+                        if (agent?.email) {
+                            const property = (missionToDelete.propertyId || '').toUpperCase();
+                            const displayDate = formatDate(missionToDelete.date || '');
+                            const dedupKey = `mission-deleted-${deleteId}-${agent.id}`;
+                            const alreadySent = await emailsCol.findOne({ dedupKey });
+                            if (!alreadySent) {
+                                const subject = `[ANNULATION] Mission supprimée : ${property} - ${displayDate}`;
+                                const html = `<p>Bonjour ${agent.name},</p>
+                                    <p>La mission suivante a été <strong>supprimée</strong> par l'administrateur :</p>
+                                    <ul>
+                                      <li><strong>Propriété :</strong> ${property}</li>
+                                      <li><strong>Date :</strong> ${displayDate}</li>
+                                    </ul>
+                                    <p>Merci de ne plus vous déplacer pour cette intervention.</p>`;
+                                const r = await sendEmail(agent.email, subject, html);
+                                if (r?.ok) {
+                                    await emailsCol.updateOne(
+                                        { dedupKey },
+                                        { $setOnInsert: { to: agent.email, subject, propertyId: missionToDelete.propertyId, dedupKey, sentAt: new Date() } },
+                                        { upsert: true }
+                                    );
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Delete notification email failed:', e);
+                    }
                 }
 
                 return res.status(200).json({ success: true, message: "Mission supprimée avec succès." });
