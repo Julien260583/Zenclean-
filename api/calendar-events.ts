@@ -291,26 +291,15 @@ export default async function handler(req: any, res: any) {
 
     if (req.method === 'GET') {
       const { propertyId, month, year } = req.query;
-
-      // Build filter
       const filter: any = {};
+      if (propertyId && propertyId !== 'all') filter.propertyId = propertyId;
 
-      if (propertyId && propertyId !== 'all') {
-        filter.propertyId = propertyId;
-      }
-
-      // Fetch events that OVERLAP the requested month (not just those starting in it).
-      // An event overlaps the month if: startDate <= endOfMonth AND (endDate >= startOfMonth OR startDate >= startOfMonth)
       if (month && year) {
         const m = parseInt(month as string);
         const y = parseInt(year as string);
         const startOfMonth = `${y}-${String(m).padStart(2, '0')}-01`;
-        // Last day of month
         const lastDay = new Date(y, m, 0).getDate();
         const endOfMonth = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-
-        // Events that overlap: startDate <= endOfMonth AND endDate >= startOfMonth
-        // (events without endDate use startDate as endDate)
         filter.startDate = { $lte: endOfMonth };
         filter.$or = [
           { endDate: { $gte: startOfMonth } },

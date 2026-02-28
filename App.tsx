@@ -21,8 +21,9 @@ const formatDayOfWeek = (dateStr: string): string => {
   return date.toLocaleDateString('fr-FR', { weekday: 'long' }).replace(/^\w/, c => c.toUpperCase());
 };
 
-const ADMIN_EMAIL = "mytoulouse@gmail.com";
-const ADMIN_PASSWORD = "bWInnRDFbs2R7XnfEv3g";
+const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || "mytoulouse@gmail.com";
+const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || "";
+const ADMIN_TOKEN = import.meta.env.VITE_ADMIN_TOKEN || "";
 const LAUNDRY_COST_PER_MISSION = 14;
 
 type AppTab = 'dashboard' | 'unified-calendar' | 'missions' | 'staff' | 'finance' | 'agent-calendar' | 'emails' | 'agent-finance';
@@ -223,10 +224,12 @@ const App: FC = () => {
     setMissions(prev => prev.map(m => ((m._id || m.id) === missionId ? mission : m)));
     
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (isAdmin && ADMIN_TOKEN) headers['x-admin-token'] = ADMIN_TOKEN;
       await fetch('/api/missions', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...mission, isAdmin })
+        headers,
+        body: JSON.stringify(mission)
       });
 
     } catch (e) { console.error(e); }
@@ -350,7 +353,7 @@ const App: FC = () => {
           </div>
         </header>
 
-        <div className="p-2 sm:p-6 flex-1 overflow-y-auto">
+        <div className={`p-2 sm:p-6 flex-1 overflow-y-auto ${isAgent ? 'pb-24' : ''}`}>
           <div className="max-w-7xl mx-auto">
             {activeTab === 'dashboard' && <DashboardView missions={missions} cleaners={cleaners} onUpdateMission={handleUpdateMission} />}
             {activeTab === 'unified-calendar' && <UnifiedCalendarView missions={missions} />}
@@ -386,6 +389,42 @@ const App: FC = () => {
             {activeTab === 'emails' && <EmailsArchiveView onSync={handleManualSync} isSyncing={isSyncing} />}
           </div>
         </div>
+
+        {/* ── Barre de navigation mobile — agents uniquement ── */}
+        {isAgent && (
+          <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-white border-t shadow-lg">
+            <div className="flex items-center justify-around px-2 py-2">
+              <button
+                onClick={() => setActiveTab('agent-calendar')}
+                className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-colors ${activeTab === 'agent-calendar' ? 'text-[#1A2D42]' : 'text-slate-400'}`}
+              >
+                <CalendarIcon size={22} />
+                <span className="text-[10px] font-black uppercase tracking-wide">Calendrier</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('missions')}
+                className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-colors ${activeTab === 'missions' ? 'text-[#1A2D42]' : 'text-slate-400'}`}
+              >
+                <ClipboardCheck size={22} />
+                <span className="text-[10px] font-black uppercase tracking-wide">Missions</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('agent-finance')}
+                className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-colors ${activeTab === 'agent-finance' ? 'text-[#1A2D42]' : 'text-slate-400'}`}
+              >
+                <FileText size={22} />
+                <span className="text-[10px] font-black uppercase tracking-wide">Mon bilan</span>
+              </button>
+              <button
+                onClick={() => { setCurrentUser(null); localStorage.removeItem('zenclean_user'); }}
+                className="flex flex-col items-center gap-1 px-4 py-2 rounded-xl text-red-400 transition-colors"
+              >
+                <LogOut size={22} />
+                <span className="text-[10px] font-black uppercase tracking-wide">Quitter</span>
+              </button>
+            </div>
+          </nav>
+        )}
       </main>
 
       {isCreatingMission && <MissionCreatorModal onClose={() => setIsCreatingMission(false)} onSave={handleCreateMission} />}

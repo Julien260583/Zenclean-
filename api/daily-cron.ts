@@ -5,7 +5,6 @@ import { sendEmail } from './lib/email.js';
 const ADMIN_EMAIL = "mytoulouse@gmail.com";
 
 const formatDate = (d: string) => d ? d.split('-').reverse().join('/') : '';
-const DEDUPLICATION_LOOKBACK_DAYS = 10;
 
 const PROPERTIES_CONFIG = [
   { id: 'naturel',    calendarId: '319da3c78547e5913af3b1fed606645b9ead9b92795482061bd440d47fc23d65@group.calendar.google.com' },
@@ -97,10 +96,14 @@ export default async function handler(req: any, res: any) {
     );
 
     if (cancelledMissions.length > 0) {
-      // Envoyer un email d'annulation aux agents assignés avant suppression
-      const sentKeys = new Set<string>(
-        (await emailsCol.find({}, { projection: { dedupKey: 1 } }).toArray())
-          .map(e => e.dedupKey).filter(Boolean)
+      const cancellationKeys = cancelledMissions
+        .filter(m => m.cleanerId)
+        .map(m => `mission-cancelled-ical-${m.id}-${m.cleanerId}`);
+
+      const sentCancelKeys = new Set<string>(
+        cancellationKeys.length > 0
+          ? (await emailsCol.find({ dedupKey: { $in: cancellationKeys } }, { projection: { dedupKey: 1 } }).toArray()).map(e => e.dedupKey).filter(Boolean)
+          : []
       );
 
       const cancellationJobs: any[] = [];
@@ -109,7 +112,7 @@ export default async function handler(req: any, res: any) {
           const agent = allCleaners.find(c => c.id === m.cleanerId);
           if (agent?.email) {
             const key = `mission-cancelled-ical-${m.id}-${agent.id}`;
-            if (!sentKeys.has(key)) {
+            if (!sentCancelKeys.has(key)) {
               cancellationJobs.push({
                 to: agent.email,
                 subject: `[ANNULATION] Réservation annulée : ${(m.propertyId || '').toUpperCase()} - ${formatDate(m.date)}`,
@@ -155,20 +158,21 @@ export default async function handler(req: any, res: any) {
 
     // ── 4. Email notifications (scheduled run only) ──
     if (isScheduledRun) {
-      // Charge TOUTES les dedupKeys déjà envoyées (pas de fenêtre temporelle limitée)
+      // Charge uniquement les dedupKeys pertinentes (missions à venir) au lieu de toute la collection
+      const upcomingMissions = await missionsCol.find({ date: { $gte: todayStr } }).toArray();
+      const relevantKeys = upcomingMissions.flatMap(m =>
+        allCleaners
+          .filter(c => c.assignedProperties?.includes(m.propertyId))
+          .map(c => `new-mission-${m.id}-${c.id}`)
+      );
+
       const sentKeys = new Set<string>(
-        (await emailsCol.find({}, { projection: { dedupKey: 1 } }).toArray())
-          .map(e => e.dedupKey)
-          .filter(Boolean)
+        relevantKeys.length > 0
+          ? (await emailsCol.find({ dedupKey: { $in: relevantKeys } }, { projection: { dedupKey: 1 } }).toArray()).map(e => e.dedupKey).filter(Boolean)
+          : []
       );
 
       const emailJobs: any[] = [];
-
-      // Nouvelles missions détectées dans ce run (insertées ci-dessus)
-      // + missions dont la date a changé (leur ancienne dedupKey ne correspond plus)
-      // On ne se base plus sur un flag "notified" en base (trop fragile),
-      // mais uniquement sur la présence de la dedupKey dans la collection emails.
-      const upcomingMissions = await missionsCol.find({ date: { $gte: todayStr } }).toArray();
 
       for (const m of upcomingMissions) {
         for (const agent of allCleaners.filter(c => c.assignedProperties?.includes(m.propertyId))) {

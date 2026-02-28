@@ -5,6 +5,20 @@ import { sendEmail } from './lib/email.js';
 
 const formatDate = (d: string) => d ? d.split('-').reverse().join('/') : '';
 
+// Retourne la date du jour en heure Paris (YYYY-MM-DD)
+const todayParis = () => {
+  const now = new Date();
+  return new Date(now.toLocaleString('sv-SE', { timeZone: 'Europe/Paris' })).toISOString().split('T')[0];
+};
+
+// Token secret partagé uniquement côté serveur
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+
+const isAdminRequest = (req: any): boolean => {
+  const token = req.headers['x-admin-token'];
+  return !!ADMIN_TOKEN && token === ADMIN_TOKEN;
+};
+
 export default async function handler(req: any, res: any) {
     try {
         const client = await clientPromise;
@@ -13,13 +27,12 @@ export default async function handler(req: any, res: any) {
 
         switch (req.method) {
             case 'GET': {
-                // Load missions from 90 days ago onwards to keep the query bounded.
-                // The frontend only uses recent/upcoming missions anyway.
-                const cutoff = new Date();
+                const cutoffStr = todayParis();
+                const cutoff = new Date(cutoffStr);
                 cutoff.setDate(cutoff.getDate() - 90);
-                const cutoffStr = cutoff.toISOString().split('T')[0];
+                const cutoffMinus90 = cutoff.toISOString().split('T')[0];
                 const missions = await missionsCol
-                    .find({ date: { $gte: cutoffStr } })
+                    .find({ date: { $gte: cutoffMinus90 } })
                     .sort({ date: 1 })
                     .toArray();
                 return res.status(200).json(missions);
@@ -84,7 +97,10 @@ export default async function handler(req: any, res: any) {
 
             case 'PUT':
                 const missionUpdate = req.body;
-                const { _id: update_id, id: updateId, noteUpdatedBy, isAdmin: callerIsAdmin, ...dataToUpdate } = missionUpdate;
+                const { _id: update_id, id: updateId, noteUpdatedBy, isAdmin: _ignored, ...dataToUpdate } = missionUpdate;
+
+                // Vérification côté serveur : seul un appel avec le token admin peut modifier les assignations
+                const callerIsAdmin = isAdminRequest(req);
 
                 let filter;
                 if (update_id) {
