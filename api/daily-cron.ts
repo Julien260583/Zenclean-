@@ -68,6 +68,10 @@ export default async function handler(req: any, res: any) {
     ]);
 
     const existingMap = new Map(existingMissions.map(m => [m.id, m]));
+    // Index secondaire : retrouver une mission existante par propertyId+date
+    // Utile si l'UID iCal change légèrement d'une exécution à l'autre (encoding, retour à la ligne…)
+    // pour éviter la suppression+recréation qui génère des mails Annulation+Nouveau.
+    const existingBySlot = new Map(existingMissions.filter(m => m.calendarEventId).map(m => [`${m.propertyId}|${m.date}`, m]));
     const bulkOps: AnyBulkWriteOperation[] = [];
     const newMissionsForNotif: any[] = [];
     const currentUids = new Set<string>();
@@ -89,9 +93,22 @@ export default async function handler(req: any, res: any) {
         const existing  = existingMap.get(missionId);
 
         if (!existing) {
-          const m = { id: missionId, calendarEventId: uid, propertyId: prop.id, date, status: 'pending', notes: '', isManual: false };
-          bulkOps.push({ insertOne: { document: m } });
-          newMissionsForNotif.push(m);
+          // Vérifier si une mission iCal existe déjà pour ce créneau (propertyId+date)
+          // avec un UID différent — dans ce cas on met à jour l'UID plutôt que de supprimer+recréer
+          const slotKey = `${prop.id}|${date}`;
+          const existingByDate = existingBySlot.get(slotKey);
+          if (existingByDate && existingByDate.calendarEventId !== uid) {
+            // L'UID a changé mais c'est la même réservation : on migre l'UID en base
+            // pour éviter la suppression lors de la phase de nettoyage + l'email Annulation/Nouveau
+            currentUids.add(existingByDate.calendarEventId); // protéger l'ancienne mission de la suppression
+            bulkOps.push({ updateOne: { filter: { id: existingByDate.id }, update: { $set: { calendarEventId: uid, id: missionId } } } });
+            // Mettre à jour la map pour la phase de suppression
+            existingMap.set(missionId, { ...existingByDate, calendarEventId: uid, id: missionId });
+          } else {
+            const m = { id: missionId, calendarEventId: uid, propertyId: prop.id, date, status: 'pending', notes: '', isManual: false };
+            bulkOps.push({ insertOne: { document: m } });
+            newMissionsForNotif.push(m);
+          }
         } else if (existing.date !== date) {
           // Ne jamais écraser cleanerId/status lors d'un changement de date
           bulkOps.push({ updateOne: { filter: { id: missionId }, update: { $set: { date } } } });
@@ -118,7 +135,7 @@ export default async function handler(req: any, res: any) {
     if (cancelledMissions.length > 0) {
       const cancellationKeys = cancelledMissions
         .filter(m => m.cleanerId)
-        .map(m => `mission-cancelled-ical-${m.id}-${m.cleanerId}`);
+        .map(m => `mission-cancelled-slot-${m.propertyId}-${m.date}-${m.cleanerId}`);
 
       const sentCancelKeys = new Set<string>(
         cancellationKeys.length > 0
@@ -131,7 +148,7 @@ export default async function handler(req: any, res: any) {
         if (m.cleanerId) {
           const agent = allCleaners.find(c => c.id === m.cleanerId);
           if (agent?.email) {
-            const key = `mission-cancelled-ical-${m.id}-${agent.id}`;
+            const key = `mission-cancelled-slot-${m.propertyId}-${m.date}-${agent.id}`;
             if (!sentCancelKeys.has(key)) {
               cancellationJobs.push({
                 to: agent.email,
@@ -191,11 +208,16 @@ export default async function handler(req: any, res: any) {
       const upcomingMissions  = allMissionsForNotif.filter(m => m.date >= todayStr);
       const overdueMissions   = allMissionsForNotif.filter(m => m.date < todayStr && m.status !== 'completed');
 
+      // ── Clé de dédup stable basée sur propertyId+date (indépendante de l'id interne
+      //    de la mission qui peut changer si la mission est recréée suite à un changement d'UID iCal)
+      const newMissionIds = new Set(newMissionsForNotif.map((m: any) => m.id));
+      const trulyNewMissions = upcomingMissions.filter(m => newMissionIds.has(m.id));
+
       // Charge uniquement les dedupKeys pertinentes (missions à venir)
       const relevantKeys = upcomingMissions.flatMap(m =>
         allCleaners
           .filter(c => c.assignedProperties?.includes(m.propertyId))
-          .map(c => `new-mission-${m.id}-${c.id}`)
+          .map(c => `new-mission-slot-${m.propertyId}-${m.date}-${c.id}`)
       );
 
       const sentKeys = new Set<string>(
@@ -206,10 +228,12 @@ export default async function handler(req: any, res: any) {
 
       const emailJobs: any[] = [];
 
-      // Nouvelles missions
-      for (const m of upcomingMissions) {
+      // Nouvelles missions : on n'envoie QUE pour les missions réellement créées lors
+      // de cette exécution (trulyNewMissions), avec une clé stable propertyId+date+agentId.
+      // Cela évite les doublons si la mission est supprimée/recréée avec un ID différent.
+      for (const m of trulyNewMissions) {
         for (const agent of allCleaners.filter(c => c.assignedProperties?.includes(m.propertyId))) {
-          const key = `new-mission-${m.id}-${agent.id}`;
+          const key = `new-mission-slot-${m.propertyId}-${m.date}-${agent.id}`;
           if (!sentKeys.has(key)) {
             emailJobs.push({ to: agent.email, subject: `[NOUVEAU] Mission : ${m.propertyId.toUpperCase()} (${formatDate(m.date)})`, html: `<p>Bonjour ${agent.name}, une mission est disponible pour ${m.propertyId.toUpperCase()} le ${formatDate(m.date)}.</p>`, propertyId: m.propertyId, key });
             sentKeys.add(key);
@@ -218,11 +242,13 @@ export default async function handler(req: any, res: any) {
       }
 
       // Rappels & alertes (utilise upcomingMissions déjà en mémoire)
+      // Les clés utilisent propertyId+date (et non m.id) pour rester stables même
+      // si la mission est recréée avec un nouvel identifiant interne.
       for (const m of upcomingMissions) {
         if (m.date === todayStr && m.status === 'assigned' && m.cleanerId) {
           const cleaner = allCleaners.find(c => c.id === m.cleanerId);
           if (cleaner?.email) {
-            const key = `reminder-j0-${m.id}-${todayStr}`;
+            const key = `reminder-j0-${m.propertyId}-${todayStr}-${m.cleanerId}`;
             if (!sentKeys.has(key)) {
               emailJobs.push({ to: cleaner.email, subject: `[RAPPEL] Mission aujourd'hui : ${m.propertyId.toUpperCase()}`, html: `<p>Bonjour ${cleaner.name}, rappel de votre mission aujourd'hui.</p>`, propertyId: m.propertyId, key });
               sentKeys.add(key);
@@ -231,7 +257,7 @@ export default async function handler(req: any, res: any) {
         }
         if (m.date === in7Str && m.status === 'pending') {
           for (const agent of allCleaners.filter(c => c.assignedProperties?.includes(m.propertyId))) {
-            const key = `alert-j7-${m.id}-${agent.id}`;
+            const key = `alert-j7-${m.propertyId}-${in7Str}-${agent.id}`;
             if (!sentKeys.has(key)) {
               emailJobs.push({ to: agent.email, subject: `[URGENT J-7] Mission libre : ${m.propertyId.toUpperCase()}`, html: `<p>La mission du ${formatDate(m.date)} n'est toujours pas assignée.</p>`, propertyId: m.propertyId, key });
               sentKeys.add(key);
@@ -242,7 +268,7 @@ export default async function handler(req: any, res: any) {
 
       // Missions en retard (utilise overdueMissions déjà en mémoire)
       for (const m of overdueMissions) {
-        const key = `overdue-alert-${m.id}`;
+        const key = `overdue-alert-${m.propertyId}-${m.date}`;
         if (!sentKeys.has(key)) {
           emailJobs.push({ to: ADMIN_EMAIL, subject: `[ALERTE RETARD] Mission non traitée : ${m.propertyId.toUpperCase()}`, html: `<p>Mission du <strong>${formatDate(m.date)}</strong> pour <strong>${m.propertyId.toUpperCase()}</strong> en retard. Statut : ${m.status}.</p>`, propertyId: m.propertyId, key });
           sentKeys.add(key);
