@@ -1917,7 +1917,6 @@ const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSyn
       } else {
         setActionStatus({ type: 'success', message: 'Synchronisation effectuée' });
       }
-      await onSync();
       await loadEmails();
     } catch (e) {
       setActionStatus({ type: 'error', message: "Impossible de joindre l'API." });
