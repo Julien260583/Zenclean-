@@ -1905,10 +1905,15 @@ const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSyn
       if (data.skipped) {
         setActionStatus({ type: 'error', message: '⚠️ Synchro annulée : aucun événement iCal récupéré (Google inaccessible ?)' });
       } else if (data.ical) {
-        const lines = data.ical.map((c: any) =>
-          c.error ? `${c.prop} : ⚠️ erreur` : `${c.prop} : ${c.events} événements`
-        ).join(' — ');
-        setActionStatus({ type: 'success', message: `Synchronisé — ${lines}` });
+        const missionParts: string[] = [];
+        if (data.missions?.inserted > 0) missionParts.push(`${data.missions.inserted} mission${data.missions.inserted > 1 ? 's' : ''} ajoutée${data.missions.inserted > 1 ? 's' : ''}`);
+        if (data.missions?.deleted > 0) missionParts.push(`${data.missions.deleted} supprimée${data.missions.deleted > 1 ? 's' : ''}`);
+        if (data.missions?.rescheduled > 0) missionParts.push(`${data.missions.rescheduled} reportée${data.missions.rescheduled > 1 ? 's' : ''}`);
+        const missionSummary = missionParts.length > 0 ? `✅ ${missionParts.join(' · ')}` : '✅ Aucun changement';
+        const icalDetail = data.ical.map((c: any) =>
+          c.error ? `${c.prop} ⚠️` : `${c.prop} ${c.events} évts`
+        ).join(' · ');
+        setActionStatus({ type: 'success', missionSummary, message: `iCal : ${icalDetail}` } as any);
       } else {
         setActionStatus({ type: 'success', message: 'Synchronisation effectuée' });
       }
@@ -1941,7 +1946,17 @@ const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSyn
            <button onClick={handlePurge} disabled={isActionRunning} className="bg-red-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm disabled:opacity-50"><Trash2 className={`size-4 ${isActionRunning ? 'animate-spin':''}`} /> Purger</button>
         </div>
       </div>
-      {actionStatus && <div className={`p-4 rounded-2xl border font-bold text-sm ${actionStatus.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>{actionStatus.message}</div>}
+      {actionStatus && (
+        <div className={`p-4 rounded-2xl border ${actionStatus.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+          {actionStatus.missionSummary
+            ? <>
+                <p className="font-black text-base">{actionStatus.missionSummary}</p>
+                <p className="text-xs mt-1 opacity-70 leading-relaxed">{actionStatus.message}</p>
+              </>
+            : <p className="font-bold text-sm">{actionStatus.message}</p>
+          }
+        </div>
+      )}
       <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
         <div className="px-6 py-5 border-b bg-slate-50/50"><h3 className="font-black text-[#1A2D42] uppercase text-xs tracking-widest">Emails Récemment Archivés</h3></div>
         {loading ? <div className="p-12 text-center text-slate-400">Chargement...</div> : (

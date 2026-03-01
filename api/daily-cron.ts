@@ -74,7 +74,13 @@ export default async function handler(req: any, res: any) {
     const existingBySlot = new Map(existingMissions.filter(m => m.calendarEventId).map(m => [`${m.propertyId}|${m.date}`, m]));
     const bulkOps: AnyBulkWriteOperation[] = [];
     const newMissionsForNotif: any[] = [];
+    const rescheduledMissions: { mission: any; oldDate: string; newDate: string }[] = [];
     const currentUids = new Set<string>();
+
+    // Compteurs pour le rapport retourné à l'admin
+    let countInserted = 0;
+    let countDeleted  = 0;
+    let countRescheduled = 0;
 
     for (const { prop, events } of calendarData) {
       for (const eventStr of events) {
@@ -108,10 +114,15 @@ export default async function handler(req: any, res: any) {
             const m = { id: missionId, calendarEventId: uid, propertyId: prop.id, date, status: 'pending', notes: '', isManual: false };
             bulkOps.push({ insertOne: { document: m } });
             newMissionsForNotif.push(m);
+            countInserted++;
           }
         } else if (existing.date !== date) {
-          // Ne jamais écraser cleanerId/status lors d'un changement de date
+          // La date du checkout a changé sur le calendrier iCal → on met à jour la mission
+          // et on mémorise l'ancien/nouveau créneau pour notifier l'agent assigné si besoin
+          const oldDate = existing.date;
           bulkOps.push({ updateOne: { filter: { id: missionId }, update: { $set: { date } } } });
+          rescheduledMissions.push({ mission: { ...existing }, oldDate, newDate: date });
+          countRescheduled++;
         }
       }
     }
@@ -189,6 +200,65 @@ export default async function handler(req: any, res: any) {
 
       const toDelete = cancelledMissions.map(m => m.id);
       bulkOps.push({ deleteMany: { filter: { id: { $in: toDelete } } } });
+      countDeleted += toDelete.length;
+    }
+
+    // ── 3b. Notifications de report de date (mission existante dont la date a changé) ──
+    if (rescheduledMissions.length > 0) {
+      const rescheduleKeys = rescheduledMissions
+        .filter(r => r.mission.cleanerId)
+        .map(r => `mission-rescheduled-${r.mission.propertyId}-${r.oldDate}-${r.newDate}-${r.mission.cleanerId}`);
+
+      const sentRescheduleKeys = new Set<string>(
+        rescheduleKeys.length > 0
+          ? (await emailsCol.find({ dedupKey: { $in: rescheduleKeys } }, { projection: { dedupKey: 1 } }).toArray()).map(e => e.dedupKey).filter(Boolean)
+          : []
+      );
+
+      const rescheduleJobs: any[] = [];
+      for (const { mission: m, oldDate, newDate } of rescheduledMissions) {
+        if (m.cleanerId) {
+          const agent = allCleaners.find(c => c.id === m.cleanerId);
+          if (agent?.email) {
+            const key = `mission-rescheduled-${m.propertyId}-${oldDate}-${newDate}-${agent.id}`;
+            if (!sentRescheduleKeys.has(key)) {
+              rescheduleJobs.push({
+                to: agent.email,
+                subject: `[REPORT] Mission déplacée : ${(m.propertyId || '').toUpperCase()} - ${formatDate(newDate)}`,
+                html: `<p>Bonjour ${agent.name},</p>
+                  <p>La date de votre mission a été <strong>modifiée</strong> par le client :</p>
+                  <ul>
+                    <li><strong>Propriété :</strong> ${(m.propertyId || '').toUpperCase()}</li>
+                    <li><strong>Ancienne date :</strong> ${formatDate(oldDate)}</li>
+                    <li><strong>Nouvelle date :</strong> ${formatDate(newDate)}</li>
+                  </ul>
+                  <p>Merci de bien noter ce changement.</p>`,
+                propertyId: m.propertyId,
+                key
+              });
+            }
+          }
+        }
+      }
+
+      if (rescheduleJobs.length > 0) {
+        const results = await Promise.all(rescheduleJobs.map(async (job) => {
+          try {
+            const r = await sendEmail(job.to, job.subject, job.html);
+            return { ...job, ok: r?.ok };
+          } catch { return { ...job, ok: false }; }
+        }));
+        const sent = results.filter(r => r.ok);
+        if (sent.length > 0) {
+          await Promise.all(sent.map(j =>
+            emailsCol.updateOne(
+              { dedupKey: j.key },
+              { $setOnInsert: { to: j.to, subject: j.subject, propertyId: j.propertyId, dedupKey: j.key, sentAt: new Date() } },
+              { upsert: true }
+            )
+          ));
+        }
+      }
     }
 
     if (bulkOps.length > 0) await missionsCol.bulkWrite(bulkOps);
@@ -298,6 +368,7 @@ export default async function handler(req: any, res: any) {
 
     return res.status(200).json({ 
       success: true,
+      missions: { inserted: countInserted, deleted: countDeleted, rescheduled: countRescheduled },
       ical: calendarData.map(c => ({ prop: c.prop.id, events: c.events.length, error: c.error || null }))
     });
   } catch (err: any) {
