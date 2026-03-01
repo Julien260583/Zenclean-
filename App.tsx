@@ -1919,7 +1919,8 @@ const EmailsArchiveView: FC<{onSync: () => void, isSyncing: boolean}> = ({ onSyn
       }
       await onSync();
       await loadEmails();
-      setActionStatus({ type: 'error', message: 'Impossible de joindre l\'API.' });
+    } catch (e) {
+      setActionStatus({ type: 'error', message: "Impossible de joindre l'API." });
     } finally {
       setIsActionRunning(false);
       setTimeout(() => setActionStatus(null), 8000);
