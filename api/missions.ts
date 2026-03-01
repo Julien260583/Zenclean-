@@ -13,7 +13,7 @@ const todayParis = () => {
 
 // Token secret partagé uniquement côté serveur
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'mytoulouse@gmail.com';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'mytoulhouse@gmail.com';
 
 const isAdminRequest = (req: any): boolean => {
   const token = req.headers['x-admin-token'];

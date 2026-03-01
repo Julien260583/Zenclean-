@@ -2,7 +2,7 @@ import clientPromise from './lib/mongodb.js';
 import { AnyBulkWriteOperation } from 'mongodb';
 import { sendEmail } from './lib/email.js';
 
-const ADMIN_EMAIL = "mytoulouse@gmail.com";
+const ADMIN_EMAIL = "mytoulhouse@gmail.com";
 
 const formatDate = (d: string) => d ? d.split('-').reverse().join('/') : '';
 

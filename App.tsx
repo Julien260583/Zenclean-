@@ -1699,54 +1699,72 @@ const StaffGridView: FC<StaffGridViewProps> = ({ cleaners, onEdit, onDelete }) =
 
 interface FinanceViewProps { missions: Mission[]; cleaners: Cleaner[]; }
 const FinanceView: FC<FinanceViewProps> = ({ missions, cleaners }) => {
-  const { monthStats, agentReports } = useMemo(() => {
-    const now = new Date();
-    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-    
-    const completedMissions = missions.filter(m => m.status === 'completed' && m.date >= firstDayOfMonth);
-    const totalMissions = completedMissions.length;
+
+  const computeStats = (firstDay: string, lastDay: string) => {
+    const completed = missions.filter(m => m.status === 'completed' && m.date >= firstDay && m.date <= lastDay);
+    const totalMissions = completed.length;
     const laundryCost = totalMissions * LAUNDRY_COST_PER_MISSION;
-    const serviceCost = completedMissions.reduce((acc, m) => {
+    const serviceCost = completed.reduce((acc, m) => {
       const cleaner = cleaners.find(c => c.id === m.cleanerId);
       return acc + (cleaner?.propertyRates[m.propertyId] || 0);
     }, 0);
-
     const reports = cleaners.map(c => {
-      const cMissions = missions.filter(m => m.cleanerId === c.id && m.status === 'completed' && m.date >= firstDayOfMonth);
+      const cMissions = completed.filter(m => m.cleanerId === c.id);
       const totalEarned = cMissions.reduce((acc, m) => acc + (c.propertyRates?.[m.propertyId] || 0), 0);
       return { ...c, totalEarned, missionCount: cMissions.length };
     });
+    return { agentReports: reports, monthStats: { totalMissions, laundryCost, totalCost: serviceCost + laundryCost } };
+  };
 
-    return {
-      agentReports: reports,
-      monthStats: { totalMissions, laundryCost, totalCost: serviceCost + laundryCost }
-    };
+  const { monthStats, agentReports } = useMemo(() => {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const lastDay  = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    return computeStats(firstDay, lastDay);
   }, [missions, cleaners]);
 
-  const handleExportCSV = () => {
-    const now = new Date();
-    const filename = `Bilan_Mensuel_Admin_${now.getMonth() + 1}_${now.getFullYear()}.csv`;
-    let csvContent = "Agent;Missions;Blanchisserie (EUR);Net à payer (EUR)\n";
-    agentReports.forEach(r => {
+  const exportCSV = (firstDay: string, lastDay: string, label: string) => {
+    const { agentReports: reports, monthStats: stats } = computeStats(firstDay, lastDay);
+    const filename = `Bilan_Admin_${label}.csv`;
+    let csv = `Bilan MyToulHouse — ${label}\n\n`;
+    csv += "Agent;Missions;Blanchisserie (EUR);Net à payer (EUR)\n";
+    reports.forEach(r => {
       const laundry = r.missionCount * LAUNDRY_COST_PER_MISSION;
-      csvContent += `${r.name};${r.missionCount};-${laundry};${r.totalEarned}\n`;
+      csv += `${r.name};${r.missionCount};-${laundry};${r.totalEarned}\n`;
     });
-    csvContent += `\nTOTAL MENSUEL;${monthStats.totalMissions};-${monthStats.laundryCost};${monthStats.totalCost - monthStats.laundryCost}\n`;
-    csvContent += `COÛT TOTAL PRESTATIONS (Ménages + Blanchisserie);;;${monthStats.totalCost}\n`;
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    csv += `\nTOTAL;${stats.totalMissions};-${stats.laundryCost};${stats.totalCost - stats.laundryCost}\n`;
+    csv += `COÛT TOTAL (Ménages + Blanchisserie);;;${stats.totalCost}\n`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     link.setAttribute("href", URL.createObjectURL(blob));
     link.setAttribute("download", filename);
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
+  const handleExportCurrentMonth = () => {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const lastDay  = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    const MONTHS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+    exportCSV(firstDay, lastDay, `${MONTHS[now.getMonth()]}_${now.getFullYear()}`);
+  };
+
+  const handleExportPrevMonth = () => {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
+    const lastDay  = new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0];
+    const MONTHS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+    const prevMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+    const prevYear  = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+    exportCSV(firstDay, lastDay, `${MONTHS[prevMonth]}_${prevYear}`);
+  };
+
   return (
     <div className="space-y-8">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap justify-between items-center gap-3">
         <h2 className="text-2xl font-black text-[#1A2D42]">Bilan Financier Global</h2>
-        <button onClick={handleExportCSV} className="bg-[#1A2D42] text-white px-5 py-2.5 rounded-2xl font-bold flex items-center gap-2 shadow-lg hover:shadow-slate-200 text-sm">
-          <Download size={18} /> Exporter le bilan (.csv)
+        <button onClick={handleExportPrevMonth} className="bg-[#1A2D42] text-white px-5 py-2.5 rounded-2xl font-bold flex items-center gap-2 shadow-lg text-sm hover:opacity-90 transition-opacity">
+          <Download size={18} /> Exporter mois précédent (.csv)
         </button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
