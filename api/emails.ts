@@ -60,13 +60,21 @@ export default async function handler(req: any, res: any) {
 
     if (action === 'cleanup') {
       try {
-        const cutoff    = new Date(); cutoff.setDate(cutoff.getDate() - 30);
-        const cutoffStr = cutoff.toISOString().split('T')[0];
-        const [emailRes, noteRes] = await Promise.all([
-          col.deleteMany({ sentAt: { $lt: cutoff } }),
-          db.collection("missions").updateMany({ date: { $lt: cutoffStr }, notes: { $exists: true, $ne: "" } }, { $set: { notes: "" } }),
+        // Emails : purge à 30 jours (dedupKeys récentes préservées)
+        const emailCutoff = new Date(); emailCutoff.setDate(emailCutoff.getDate() - 30);
+        // Missions : purge à 3 mois — uniquement les missions passées, jamais les futures
+        const missionCutoff = new Date(); missionCutoff.setMonth(missionCutoff.getMonth() - 3);
+        const missionCutoffStr = missionCutoff.toISOString().split('T')[0];
+        const missionsCol = db.collection("missions");
+        const [emailRes, noteRes, missionRes] = await Promise.all([
+          col.deleteMany({ sentAt: { $lt: emailCutoff } }),
+          missionsCol.updateMany(
+            { date: { $lt: missionCutoffStr }, notes: { $exists: true, $ne: "" } },
+            { $set: { notes: "" } }
+          ),
+          missionsCol.deleteMany({ date: { $lt: missionCutoffStr } }),
         ]);
-        return res.status(200).json({ success: true, message: `${emailRes.deletedCount} emails et ${noteRes.modifiedCount} notes purgés.` });
+        return res.status(200).json({ success: true, message: `${emailRes.deletedCount} emails, ${missionRes.deletedCount} missions et ${noteRes.modifiedCount} notes purgés.` });
       } catch (e: any) {
         return res.status(500).json({ error: e.message });
       }
