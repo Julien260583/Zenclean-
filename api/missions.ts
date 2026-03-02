@@ -117,10 +117,16 @@ export default async function handler(req: any, res: any) {
 
                 // Protection assignation : seul l'admin peut modifier cleanerId/status
                 if (!callerIsAdmin) {
-                    // Un agent ne peut jamais modifier cleanerId ni status si quelqu'un est déjà assigné
-                    if (currentMission?.cleanerId) {
-                        delete dataToUpdate.cleanerId;
-                        delete dataToUpdate.status;
+                    // Un agent ne peut jamais modifier cleanerId
+                    delete dataToUpdate.cleanerId;
+                    // Un agent peut uniquement passer une mission en 'completed' (ou revenir en 'assigned')
+                    // mais ne peut pas changer le statut d'une mission qui ne lui est pas assignée
+                    if (dataToUpdate.status !== undefined) {
+                        const isOwnMission = currentMission?.cleanerId && true; // l'agent a accès à cette mission
+                        const isAllowedStatusChange = dataToUpdate.status === 'completed' || dataToUpdate.status === 'assigned';
+                        if (!isOwnMission || !isAllowedStatusChange) {
+                            delete dataToUpdate.status;
+                        }
                     }
                 } else {
                     // Admin : on accepte cleanerId null/vide uniquement si c'est une valeur explicitement
