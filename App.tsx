@@ -585,12 +585,13 @@ const DashboardView: FC<DashboardViewProps> = ({ missions, cleaners, onUpdateMis
 
     const filtered = missions.filter(m => (m.status === 'pending' || (m.date >= todayStr && m.date <= sevenDaysLaterStr && m.status !== 'completed')))
                              .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const firstDayOfMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
     return {
       priorityMissions: filtered,
       stats: {
         pending: missions.filter(m => m.status === 'pending').length,
         today: missions.filter(m => m.date === todayStr && m.status !== 'completed').length,
-        completed: missions.filter(m => m.status === 'completed').length,
+        completedThisMonth: missions.filter(m => m.status === 'completed' && m.date >= firstDayOfMonth).length,
         agents: cleaners.length
       }
     };
@@ -601,7 +602,7 @@ const DashboardView: FC<DashboardViewProps> = ({ missions, cleaners, onUpdateMis
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <StatCard label="Missions Libres" value={stats.pending} icon={AlertCircle} color="text-red-500" bg="bg-red-50" />
         <StatCard label="Missions Aujourd'hui" value={stats.today} icon={Clock} color="text-blue-500" bg="bg-blue-50" />
-        <StatCard label="Total Traité" value={stats.completed} icon={CheckCircle2} color="text-emerald-500" bg="bg-emerald-50" />
+        <StatCard label="Missions Traitées (ce mois)" value={stats.completedThisMonth} icon={CheckCircle2} color="text-emerald-500" bg="bg-emerald-50" />
       </div>
       <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
         <div className="px-6 py-5 border-b flex justify-between items-center bg-slate-50/50">
