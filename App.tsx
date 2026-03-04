@@ -213,6 +213,9 @@ const App: FC = () => {
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (isAdmin && ADMIN_TOKEN) headers['x-admin-token'] = ADMIN_TOKEN;
+      if (isAgent && currentUser && currentUser !== 'admin') {
+        headers['x-cleaner-id'] = (currentUser as Cleaner).id;
+      }
       await fetch('/api/missions', {
         method: 'PUT',
         headers,

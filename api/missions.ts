@@ -1,4 +1,3 @@
-
 import clientPromise from './lib/mongodb.js';
 import { ObjectId } from 'mongodb';
 import { sendEmail } from './lib/email.js';
@@ -115,15 +114,26 @@ export default async function handler(req: any, res: any) {
                 // Fetch the current mission to detect note changes and protect assignation
                 const currentMission = await missionsCol.findOne(filter);
 
-                // Protection assignation : seul l'admin peut modifier cleanerId/status
+                // Récupère l'ID de l'agent depuis le header (envoyé par le frontend)
+                const callerCleanerId = req.headers['x-cleaner-id'] || null;
+
+                // Protection assignation
                 if (!callerIsAdmin) {
-                    // Un agent ne peut jamais modifier cleanerId
-                    delete dataToUpdate.cleanerId;
-                    // Un agent peut uniquement passer une mission en 'completed' (ou revenir en 'assigned')
-                    // mais ne peut pas changer le statut d'une mission qui ne lui est pas assignée
+                    if ('cleanerId' in dataToUpdate) {
+                        // Un agent peut uniquement se définir LUI-MÊME comme cleanerId
+                        // (auto-assignation), ou retirer son propre assignement.
+                        // Il ne peut pas assigner quelqu'un d'autre ni voler la mission d'un autre.
+                        const isSelfAssign = dataToUpdate.cleanerId === callerCleanerId;
+                        const isSelfUnassign = dataToUpdate.cleanerId == null && currentMission?.cleanerId === callerCleanerId;
+                        if (!isSelfAssign && !isSelfUnassign) {
+                            delete dataToUpdate.cleanerId;
+                        }
+                    }
+                    // Un agent peut uniquement modifier le statut de ses propres missions
                     if (dataToUpdate.status !== undefined) {
-                        const isOwnMission = currentMission?.cleanerId && true; // l'agent a accès à cette mission
-                        const isAllowedStatusChange = dataToUpdate.status === 'completed' || dataToUpdate.status === 'assigned';
+                        const willBeOwner = dataToUpdate.cleanerId === callerCleanerId;
+                        const isOwnMission = currentMission?.cleanerId === callerCleanerId || willBeOwner;
+                        const isAllowedStatusChange = dataToUpdate.status === 'completed' || dataToUpdate.status === 'assigned' || dataToUpdate.status === 'pending';
                         if (!isOwnMission || !isAllowedStatusChange) {
                             delete dataToUpdate.status;
                         }
@@ -134,12 +144,6 @@ export default async function handler(req: any, res: any) {
                     if (dataToUpdate.cleanerId === '') {
                         dataToUpdate.cleanerId = null;
                     }
-                }
-
-                // Sécurité supplémentaire : ne jamais écraser cleanerId existant avec une valeur vide/falsy
-                // quelle que soit la source (bug frontend, requête corrompue, etc.)
-                if (!callerIsAdmin && dataToUpdate.cleanerId === '' || dataToUpdate.cleanerId === undefined) {
-                    delete dataToUpdate.cleanerId;
                 }
 
                 const noteChanged = dataToUpdate.notes !== undefined && dataToUpdate.notes !== (currentMission?.notes ?? '');
