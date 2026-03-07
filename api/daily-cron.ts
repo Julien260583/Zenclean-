@@ -84,12 +84,30 @@ export default async function handler(req: any, res: any) {
 
     for (const { prop, events } of calendarData) {
       for (const eventStr of events) {
-        const dtEndMatch = eventStr.match(/DTEND(?:;VALUE=DATE)?:(\d{8})/);
+        // Extrait le DTEND quelle que soit la forme :
+        //   DTEND;VALUE=DATE:20250410          → all-day (date uniquement)
+        //   DTEND:20250410T110000Z              → UTC avec heure
+        //   DTEND;TZID=Europe/Paris:20250410T110000  → heure locale avec TZID
+        const dtEndMatch = eventStr.match(/DTEND(?:;[^:]*)?:(\d{8}(?:T\d{6}Z?)?)/);
         const uidMatch   = eventStr.match(/UID:(.*)/);
         if (!dtEndMatch || !uidMatch) continue;
 
-        const raw  = dtEndMatch[1];
-        const date = `${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`;
+        const rawDtEnd = dtEndMatch[1];
+        // Pour les événements avec heure : extraire uniquement les 8 premiers chiffres (YYYYMMDD)
+        // Pour les all-day (format iCal standard) : DTEND est exclusif, donc la date de checkout
+        // est DTEND - 1 jour. Pour les événements avec heure fixe de checkout (ex: T110000),
+        // la date du DTEND est directement la date de la mission (jour du départ).
+        let date: string;
+        if (rawDtEnd.length === 8) {
+          // All-day : DTEND exclusif → on soustrait 1 jour pour obtenir le dernier jour du séjour
+          const dtEndExclusive = new Date(`${rawDtEnd.slice(0,4)}-${rawDtEnd.slice(4,6)}-${rawDtEnd.slice(6,8)}T12:00:00Z`);
+          dtEndExclusive.setDate(dtEndExclusive.getDate() - 1);
+          date = dtEndExclusive.toISOString().split('T')[0];
+        } else {
+          // Événement avec heure (ex: 20250410T110000Z) : la date du DTEND est le jour du checkout
+          const rawDate = rawDtEnd.slice(0, 8);
+          date = `${rawDate.slice(0,4)}-${rawDate.slice(4,6)}-${rawDate.slice(6,8)}`;
+        }
         const uid  = uidMatch[1].trim();
         currentUids.add(uid); // toujours enregistrer l'UID, même pour les événements passés
 
