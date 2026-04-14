@@ -123,6 +123,7 @@ const App: FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [cleaners, setCleaners] = useState<Cleaner[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isCreatingMission, setIsCreatingMission] = useState(false);
@@ -139,12 +140,14 @@ const App: FC = () => {
   const loadInitialData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [cleanersRes, missionsRes] = await Promise.all([
+      const [cleanersRes, missionsRes, calendarRes] = await Promise.all([
         fetch('/api/cleaners').then(res => res.json()),
-        fetch('/api/missions').then(res => res.json())
+        fetch('/api/missions').then(res => res.json()),
+        fetch('/api/calendar-events').then(res => res.json()).catch(() => [])
       ]);
       setCleaners(Array.isArray(cleanersRes) && cleanersRes.length > 0 ? cleanersRes : INITIAL_CLEANERS);
       setMissions(Array.isArray(missionsRes) ? missionsRes : []);
+      setCalendarEvents(Array.isArray(calendarRes) ? calendarRes : []);
     } catch (error) {
       console.error("Erreur critique:", error);
     } finally {
@@ -361,6 +364,7 @@ const App: FC = () => {
                 onEditNote={(m: Mission) => setEditingNoteMission(m)}
                 onSync={handleManualSync} 
                 isSyncing={isSyncing}
+                calendarEvents={calendarEvents}
               />
             )}
             {activeTab === 'staff' && (
@@ -1404,9 +1408,10 @@ interface MissionsTableProps {
   isSyncing: boolean;
   onCreateMission: () => void;
   onDeleteMission: (mission: Mission) => void;
+  calendarEvents: CalendarEvent[];
 }
 
-const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin, isAgent, currentCleaner, onUpdateMission, onEditNote, onSync, isSyncing, onCreateMission, onDeleteMission }) => {
+const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin, isAgent, currentCleaner, onUpdateMission, onEditNote, onSync, isSyncing, onCreateMission, onDeleteMission, calendarEvents }) => {
   const [activePicker, setActivePicker] = useState<string | null>(null);
   const [showPast, setShowPast] = useState(false);
 
@@ -1480,6 +1485,7 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
           const cleaner = m.cleanerId ? cleaners.find(c => c.id === m.cleanerId) : undefined;
           const isMyMission = isAgent && m.cleanerId === currentCleaner?.id;
           const prop = PROPERTIES.find(p => p.id === m.propertyId);
+          const hasCheckin = calendarEvents.some(e => e.propertyId === m.propertyId && e.startDate === m.date && e.eventType === 'checkin');
           return (
             <div key={missionId} className={`bg-white rounded-2xl border shadow-sm p-4 ${m.date < todayStr ? 'opacity-50' : ''}`}>
               {/* Ligne 1 : propriété + badges */}
@@ -1489,6 +1495,12 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
                   <span className="font-black text-sm uppercase tracking-tight text-slate-800">{m.propertyId}</span>
                   {m.isManual && <MousePointer2 size={12} className="text-orange-500" />}
                   {m.notes && <StickyNote size={14} className="text-orange-500" />}
+                  {hasCheckin && (
+                    <div className="group relative">
+                      <span title="Arrivée voyageur" className="text-sm leading-none">🧳</span>
+                      <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block bg-slate-800 text-white text-[10px] p-2 rounded-lg w-40 shadow-xl z-50 whitespace-nowrap">Arrivée voyageur ce jour</div>
+                    </div>
+                  )}
                 </div>
                 <StatusBadge status={m.status} cleanerId={m.cleanerId} />
               </div>
@@ -1581,6 +1593,7 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
               const missionId = m._id || m.id;
               const cleaner = m.cleanerId ? cleaners.find(c => c.id === m.cleanerId) : undefined;
               const isMyMission = isAgent && m.cleanerId === currentCleaner?.id;
+              const hasCheckin = calendarEvents.some(e => e.propertyId === m.propertyId && e.startDate === m.date && e.eventType === 'checkin');
 
               return (
               <tr key={missionId} className={`hover:bg-slate-50/50 transition-colors ${m.date < todayStr ? 'opacity-50' : ''}`}>
@@ -1590,6 +1603,12 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
                     <span className="font-bold uppercase tracking-tight">{m.propertyId}</span>
                     {m.isManual && <MousePointer2 size={12} className="text-orange-500" />}
                     {m.notes && <div className="group relative"><StickyNote size={14} className="text-orange-500 cursor-help" /><div className="absolute left-0 bottom-full mb-2 hidden group-hover:block bg-slate-800 text-white text-[10px] p-2 rounded-lg w-48 shadow-xl z-50">{m.notes}</div></div>}
+                    {hasCheckin && (
+                      <div className="group relative">
+                        <span title="Arrivée voyageur" className="text-sm leading-none cursor-default">🧳</span>
+                        <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block bg-slate-800 text-white text-[10px] p-2 rounded-lg w-40 shadow-xl z-50 whitespace-nowrap">Arrivée voyageur ce jour</div>
+                      </div>
+                    )}
                   </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
