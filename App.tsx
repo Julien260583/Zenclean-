@@ -1485,7 +1485,7 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
           const cleaner = m.cleanerId ? cleaners.find(c => c.id === m.cleanerId) : undefined;
           const isMyMission = isAgent && m.cleanerId === currentCleaner?.id;
           const prop = PROPERTIES.find(p => p.id === m.propertyId);
-          const hasCheckin = calendarEvents.some(e => e.propertyId === m.propertyId && e.startDate === m.date && e.eventType === 'checkin');
+          const hasCheckin = calendarEvents.some(e => e.propertyId === m.propertyId && e.startDate === m.date && (e.eventType === 'checkin' || e.eventType === 'reservation'));
           return (
             <div key={missionId} className={`bg-white rounded-2xl border shadow-sm p-4 ${m.date < todayStr ? 'opacity-50' : ''}`}>
               {/* Ligne 1 : propriété + badges */}
@@ -1593,7 +1593,7 @@ const MissionsTableView: FC<MissionsTableProps> = ({ missions, cleaners, isAdmin
               const missionId = m._id || m.id;
               const cleaner = m.cleanerId ? cleaners.find(c => c.id === m.cleanerId) : undefined;
               const isMyMission = isAgent && m.cleanerId === currentCleaner?.id;
-              const hasCheckin = calendarEvents.some(e => e.propertyId === m.propertyId && e.startDate === m.date && e.eventType === 'checkin');
+              const hasCheckin = calendarEvents.some(e => e.propertyId === m.propertyId && e.startDate === m.date && (e.eventType === 'checkin' || e.eventType === 'reservation'));
 
               return (
               <tr key={missionId} className={`hover:bg-slate-50/50 transition-colors ${m.date < todayStr ? 'opacity-50' : ''}`}>
