@@ -250,9 +250,11 @@ const App: FC = () => {
   const handleCreateMission = async (missionData: Partial<Mission>) => {
     const newMission: Partial<Mission> = { ...missionData, isManual: true, status: 'pending' };
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (isAdmin && ADMIN_TOKEN) headers['x-admin-token'] = ADMIN_TOKEN;
       const response = await fetch('/api/missions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(newMission)
       });
       if(response.ok) {
@@ -260,10 +262,13 @@ const App: FC = () => {
         setMissions(prev => [...prev, createdMission]);
         setIsCreatingMission(false);
       } else {
-        console.error("Failed to create mission");
+        const data = await response.json().catch(() => ({}));
+        alert(data.error || `Erreur ${response.status} : impossible de créer la mission.`);
+        console.error("Failed to create mission", response.status, data);
       }
     } catch (e) {
       console.error("Error creating mission:", e);
+      alert("Une erreur réseau est survenue. Vérifiez votre connexion.");
     }
   };
 
