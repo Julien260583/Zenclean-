@@ -77,6 +77,11 @@ export default async function handler(req: any, res: any) {
     const rescheduledMissions: { mission: any; oldDate: string; newDate: string }[] = [];
     const currentUids = new Set<string>();
 
+    // ── Nuki : propriétés concernées par l'alerte activation ──
+    const NUKI_PROPERTIES = new Set(['naturel', 'scandinave']);
+    // Indique si aujourd'hui il y a une arrivée client sur Naturel ou Scandinave
+    let nukiCheckinToday = false;
+
     // Compteurs pour le rapport retourné à l'admin
     let countInserted = 0;
     let countDeleted  = 0;
@@ -88,9 +93,17 @@ export default async function handler(req: any, res: any) {
         //   DTEND;VALUE=DATE:20250410          → all-day (date uniquement)
         //   DTEND:20250410T110000Z              → UTC avec heure
         //   DTEND;TZID=Europe/Paris:20250410T110000  → heure locale avec TZID
-        const dtEndMatch = eventStr.match(/DTEND(?:;[^:]*)?:(\d{8}(?:T\d{6}Z?)?)/);
-        const uidMatch   = eventStr.match(/UID:(.*)/);
+        const dtEndMatch   = eventStr.match(/DTEND(?:;[^:]*)?:(\d{8}(?:T\d{6}Z?)?)/);
+        const dtStartMatch = eventStr.match(/DTSTART(?:;[^:]*)?:(\d{8}(?:T\d{6}Z?)?)/);
+        const uidMatch     = eventStr.match(/UID:(.*)/);
         if (!dtEndMatch || !uidMatch) continue;
+
+        // ── Détection arrivée client aujourd'hui (DTSTART) pour l'alerte Nuki ──
+        if (dtStartMatch && NUKI_PROPERTIES.has(prop.id)) {
+          const rawStart = dtStartMatch[1].slice(0, 8);
+          const checkinDate = `${rawStart.slice(0,4)}-${rawStart.slice(4,6)}-${rawStart.slice(6,8)}`;
+          if (checkinDate === todayStr) nukiCheckinToday = true;
+        }
 
         const rawDtEnd = dtEndMatch[1];
         // Pour les événements avec heure : extraire uniquement les 8 premiers chiffres (YYYYMMDD)
@@ -360,6 +373,35 @@ export default async function handler(req: any, res: any) {
         if (!sentKeys.has(key)) {
           emailJobs.push({ to: ADMIN_EMAIL, subject: `[ALERTE RETARD] Mission non traitée : ${m.propertyId.toUpperCase()}`, html: `<p>Mission du <strong>${formatDate(m.date)}</strong> pour <strong>${m.propertyId.toUpperCase()}</strong> en retard. Statut : ${m.status}.</p>`, propertyId: m.propertyId, key });
           sentKeys.add(key);
+        }
+      }
+
+      // ── Alerte Nuki : mission de ménage OU arrivée client aujourd'hui sur Naturel/Scandinave ──
+      // On vérifie : mission planifiée aujourd'hui pour ces propriétés, OU arrivée iCal détectée
+      const nukiMissionToday = upcomingMissions.some(
+        m => m.date === todayStr && NUKI_PROPERTIES.has(m.propertyId)
+      );
+      if ((nukiMissionToday || nukiCheckinToday) && isScheduledRun) {
+        const nukiKey = `nuki-alert-${todayStr}`;
+        const nukiAlreadySent = await emailsCol.findOne({ dedupKey: nukiKey });
+        if (!nukiAlreadySent) {
+          try {
+            const nukiResult = await sendEmail(
+              ADMIN_EMAIL,
+              'activation nuki',
+              '<p>pensez à activer Nuki marquette</p>'
+            );
+            if (nukiResult?.ok) {
+              await emailsCol.updateOne(
+                { dedupKey: nukiKey },
+                { $setOnInsert: { to: ADMIN_EMAIL, subject: 'activation nuki', propertyId: 'naturel|scandinave', dedupKey: nukiKey, sentAt: new Date() } },
+                { upsert: true }
+              );
+              console.log('[Nuki] Email envoyé à l\'admin');
+            }
+          } catch (e) {
+            console.error('[Nuki] Erreur envoi email:', e);
+          }
         }
       }
 
